@@ -1,0 +1,1257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Seminar 1: Bayes reads your handwriting</title>
+
+<!-- Formulas: KaTeX, copied into lib/ so the slides work offline -->
+<link rel="stylesheet" href="lib/katex/katex.min.css">
+<script defer src="lib/katex/katex.min.js"></script>
+<script defer src="lib/katex/auto-render.min.js"></script>
+
+<style>
+  /* The same fonts and colours as the demo (../demo/index.html) */
+  @font-face { font-family: "Golos Text"; font-weight: 400; src: url("../demo/fonts/golos-text-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Golos Text"; font-weight: 500; src: url("../demo/fonts/golos-text-latin-500-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Golos Text"; font-weight: 600; src: url("../demo/fonts/golos-text-latin-600-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Golos Text"; font-weight: 700; src: url("../demo/fonts/golos-text-latin-700-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Caveat"; font-weight: 500; src: url("../demo/fonts/caveat-latin-500-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Caveat"; font-weight: 700; src: url("../demo/fonts/caveat-latin-700-normal.woff2") format("woff2"); }
+
+  :root {
+    --paper: #fbfcfd;
+    --grid: #e6ecf2;
+    --margin: #e8a59d;
+    --ink: #1b2333;
+    --ink-soft: #5b6577;
+    --line: #c3ccd9;
+    --pen: #1d3fa0;          /* handwritten notes: ballpoint blue */
+    --blue: #2a78d6;         /* AI essays, flagged essays, the answer */
+    --blue-pale: #e3eefb;
+    --orange: #eb6834;       /* human essays */
+    --orange-pale: #fdebe3;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #e9edf2;
+    color: var(--ink);
+    font-family: "Golos Text", system-ui, "Segoe UI", sans-serif;
+    overflow: hidden;
+  }
+
+  /* ---------- The stage: every slide is drawn on a 1600 x 900 page, scaled to fit the screen ---------- */
+  #deck { position: absolute; left: 50%; top: 50%; width: 1600px; height: 900px; transform-origin: center; }
+  .slide {
+    position: absolute; inset: 0;
+    display: none; flex-direction: column;
+    padding: 70px 140px 70px 110px;
+    background-color: var(--paper);
+    /* a page of a squared exercise book, like the demo's drawing pad */
+    background-image:
+      linear-gradient(to right, transparent 1490px, var(--margin) 1490px, var(--margin) 1492px, transparent 1492px),
+      linear-gradient(to right, var(--grid) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
+    background-size: 100% 100%, 40px 40px, 40px 40px;
+    box-shadow: 0 20px 60px -30px rgba(27, 35, 51, 0.45);
+  }
+  .slide.current { display: flex; }
+
+  h1 { margin: 0; font-size: 92px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.05; }
+  h2 { margin: 0 0 40px; font-size: 56px; font-weight: 600; letter-spacing: -0.01em; }
+  p, li { font-size: 32px; line-height: 1.45; }
+  p { margin: 0 0 22px; }
+  ul { margin: 0; padding-left: 1.1em; }
+  li { margin-bottom: 14px; }
+  .soft { color: var(--ink-soft); }
+  .small { font-size: 24px; }
+  /* The slide number, bottom right (added by the script below; not on the title slide) */
+  .num { position: absolute; right: 150px; bottom: 36px; font-size: 24px; font-weight: 500; color: var(--ink-soft); font-variant-numeric: tabular-nums; }
+  .hand { font-family: "Caveat", cursive; font-weight: 700; color: var(--pen); }
+  .katex { font-size: 1.05em; }
+
+  /* Things that appear one by one: press the right arrow */
+  .step { opacity: 0; transition: opacity 0.25s; }
+  .step.shown { opacity: 1; }
+
+  /* A box for a definition or a theorem */
+  .box { border: 2px solid var(--line); border-radius: 14px; background: white; padding: 22px 30px; margin-bottom: 26px; }
+  .box .name { font-size: 24px; font-weight: 600; color: var(--ink-soft); text-transform: uppercase; letter-spacing: 0.06em; margin-bottom: 6px; }
+  .box p { margin: 0; }
+  .when { font-size: 26px; color: var(--ink-soft); }
+  .box .katex-display { margin: 6px 0 0; }
+
+  /* Slide 1 */
+  .title { justify-content: center; }
+  .title .kicker { font-size: 28px; font-weight: 500; color: var(--ink-soft); margin-bottom: 28px; }
+  .title .subtitle { font-size: 38px; max-width: 1100px; margin: 32px 0 44px; color: var(--ink); line-height: 1.35; }
+  /* Ten real MNIST digits: the image is 316 x 28 pixels, shown 3 times larger without smoothing */
+  .title figure { margin: 0 0 56px; }
+  .title figure img { display: block; width: 948px; height: 84px; image-rendering: pixelated; }
+  .title figcaption { font-size: 22px; color: var(--ink-soft); margin-top: 10px; }
+  .title .author { border-top: 2px solid var(--line); padding-top: 26px; max-width: 1250px; }
+  .title .name { font-size: 44px; font-weight: 700; margin: 0 0 6px; }
+  .title .job { font-size: 32px; color: var(--ink); margin: 0; }
+
+  /* Slide 2 */
+  .demo { justify-content: center; }
+  .button {
+    display: inline-block; align-self: flex-start;
+    font-size: 40px; font-weight: 600; color: white; text-decoration: none;
+    background: var(--blue); border-radius: 14px; padding: 22px 46px; margin-top: 30px;
+  }
+  .button:hover, .button:focus-visible { background: var(--pen); outline: none; }
+
+  /* Slide 3: the question and the four answers */
+  .question { font-size: 40px; line-height: 1.45; max-width: 1250px; margin-bottom: 50px; }
+  .options { display: grid; grid-template-columns: repeat(4, 1fr); gap: 28px; max-width: 1250px; }
+  .option { border: 2px solid var(--line); background: white; border-radius: 14px; padding: 22px 0; text-align: center; font-size: 44px; font-weight: 600; }
+  .option b { color: var(--ink-soft); font-weight: 600; margin-right: 12px; }
+
+  /* Slide 4: the tree of 1,000 essays */
+  .tree text { font-family: "Golos Text", sans-serif; fill: var(--ink); }
+  .tree .node rect { fill: white; stroke: var(--line); stroke-width: 2; }
+  .tree .node.ai rect { stroke: var(--blue); }
+  .tree .node.human rect { stroke: var(--orange); }
+  .tree .node.flagged rect { fill: var(--blue-pale); stroke: var(--blue); stroke-width: 3; }
+  .tree .edge { stroke: #9aa5b5; stroke-width: 2.5; fill: none; }
+  .tree .rate { font-family: "Caveat", cursive; font-weight: 700; font-size: 34px; fill: var(--pen); }
+  .result { font-size: 36px; margin-top: 10px; }
+  .result .big { font-weight: 700; color: var(--blue); }
+
+  /* Slides 7-9: a calculation, line by line */
+  .calc p { font-size: 34px; margin-bottom: 18px; }
+  .answer { display: inline-block; font-weight: 700; color: var(--blue); }
+
+  /* Slide 8: the names under the formula */
+  .named { display: flex; justify-content: center; margin: 20px 0 10px; font-size: 54px; }
+  .labels { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-top: 34px; }
+  .labels div { font-size: 28px; line-height: 1.35; }
+  .labels .hand { font-size: 46px; display: block; }
+
+  /* Slide 9: prior and posterior side by side */
+  .compare { display: grid; grid-template-columns: repeat(2, 1fr); gap: 40px; margin-top: 16px; max-width: 1150px; }
+  .compare div { background: white; border: 2px solid var(--line); border-radius: 14px; padding: 18px 28px; font-size: 32px; }
+  .compare strong { color: var(--blue); }
+
+
+  /* ---------- Part 2: the spam filter ---------- */
+  :root { --ham: var(--orange); --ham-pale: var(--orange-pale); --spam: var(--blue); --spam-pale: var(--blue-pale); }
+
+  /* Slide 10: a real message on a phone screen */
+  .part { justify-content: center; }
+  .part .kicker { font-size: 28px; font-weight: 500; color: var(--ink-soft); margin-bottom: 20px; }
+  .sms { max-width: 900px; background: white; border: 2px solid var(--line); border-radius: 26px 26px 26px 6px; padding: 24px 32px; font-size: 30px; line-height: 1.4; margin: 40px 0 30px; }
+  .sms .from { font-size: 22px; color: var(--ink-soft); margin-bottom: 6px; }
+
+  /* A message in a table, and the class tags */
+  .tag { display: inline-block; font-size: 22px; font-weight: 600; border-radius: 8px; padding: 2px 12px; }
+  .tag.ham { background: var(--ham-pale); color: #9a3a14; }
+  .tag.spam { background: var(--spam-pale); color: #174a8c; }
+
+  /* Slide 11: input -> classifier -> class */
+  .pipe { display: flex; align-items: center; gap: 26px; margin: 10px 0 40px; font-size: 30px; }
+  .pipe .stage { background: white; border: 2px solid var(--line); border-radius: 14px; padding: 18px 26px; }
+  .pipe .stage.model { border-color: var(--pen); color: var(--pen); font-weight: 600; }
+  .pipe .arrow { font-size: 40px; color: var(--ink-soft); }
+
+  /* Slide 12: training set, test set, folds */
+  .split { display: flex; height: 54px; max-width: 1200px; margin: 6px 0 34px; border-radius: 10px; overflow: hidden; font-size: 24px; font-weight: 600; }
+  .split div { display: flex; align-items: center; justify-content: center; }
+  .split .train { flex: 8; background: #f3e7b8; }
+  .split .test { flex: 2; background: #cfe3ea; margin-left: 2px; }
+  .folds { display: grid; grid-template-columns: 70px repeat(10, 1fr); gap: 4px; max-width: 900px; font-size: 20px; }
+  .folds div { height: 26px; border-radius: 4px; background: #f3e7b8; }
+  .folds .run { background: none; color: var(--ink-soft); line-height: 26px; }
+  .folds .held { background: #9cc7f0; }
+
+  /* Slide 13: the confusion matrix */
+  .cm { border-collapse: separate; border-spacing: 4px; font-size: 28px; }
+  .cm th { font-weight: 500; color: var(--ink-soft); padding: 6px 14px; font-size: 24px; }
+  .cm td { padding: 14px 22px; border-radius: 10px; text-align: center; min-width: 210px; }
+  .cm .right { background: var(--blue-pale); }
+  .cm .wrong { background: #fde3dc; }
+  .cm .big { font-size: 40px; font-weight: 700; }
+  .formulas { display: grid; grid-template-columns: repeat(3, auto); gap: 18px 50px; margin-top: 30px; font-size: 30px; justify-content: start; }
+
+  /* Slide 16-17: the toy data and counts */
+  .toy { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; max-width: 1250px; }
+  .toy .col { background: white; border: 2px solid var(--line); border-radius: 14px; padding: 18px 26px; }
+  .toy h3 { margin: 0 0 10px; font-size: 28px; }
+  .toy ol { margin: 0; padding-left: 1.4em; columns: 2; column-gap: 30px; }
+  .toy li { font-size: 26px; margin-bottom: 4px; }
+  .grid-table { border-collapse: collapse; font-size: 28px; background: white; }
+  .grid-table th, .grid-table td { border: 2px solid var(--line); padding: 8px 20px; text-align: center; }
+  .grid-table th { font-weight: 600; background: #f4f6f9; }
+  .grid-table td.zero { color: #c0392b; font-weight: 700; }
+  .grid-table td.label { text-align: left; }
+
+  /* Slide 26: two sentences */
+  .sentences p { font-size: 30px; background: white; border: 2px solid var(--line); border-radius: 12px; padding: 12px 22px; margin-bottom: 14px; max-width: 1250px; }
+
+  /* Slide 28: the class balance bar */
+  .balance { display: flex; height: 70px; max-width: 1250px; border-radius: 10px; overflow: hidden; font-size: 26px; font-weight: 600; margin: 10px 0 12px; }
+  .balance div { display: flex; align-items: center; padding: 0 20px; color: white; }
+  .balance .ham { background: var(--ham); flex: 4518; }
+  .balance .spam { background: var(--spam); flex: 653; margin-left: 2px; }
+  .words { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; max-width: 1250px; margin-top: 26px; }
+  .words div { background: white; border: 2px solid var(--line); border-radius: 14px; padding: 14px 24px; font-size: 26px; }
+
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; max-width: 1300px; }
+  .note { font-size: 26px; color: var(--ink-soft); }
+  .reading { padding: 14px 26px; margin-bottom: 16px; }
+  .reading a { color: var(--blue); font-weight: 600; }
+  .reading .when { margin-top: 4px; }
+  .trap { font-family: "Caveat", cursive; font-weight: 700; color: var(--pen); font-size: 40px; }
+
+
+  /* ---------- Part 3: the iris flowers ---------- */
+  /* One colour per species; the same colours as the iris figures in img/ */
+  :root { --setosa: #2e9e6b; --versicolor: #2a78d6; --virginica: #8e4fc0; }
+  .tag.setosa { background: #e0f3ea; color: #1d6b48; }
+  .tag.versicolor { background: var(--blue-pale); color: #174a8c; }
+  .tag.virginica { background: #efe5f8; color: #5e2d8a; }
+
+  /* Slide 33: rows of the data */
+  .grid-table.data td { font-variant-numeric: tabular-nums; }
+
+  /* Slide 41: the correlation matrices */
+  .corr { border-collapse: separate; border-spacing: 3px; font-size: 24px; }
+  .corr th { font-weight: 500; color: var(--ink-soft); padding: 4px 10px; }
+  .corr td { width: 92px; height: 44px; text-align: center; border-radius: 8px; font-variant-numeric: tabular-nums; }
+  .corr td.diag { background: #eef1f5; color: var(--ink-soft); }
+  .corr-title { font-size: 26px; font-weight: 600; margin-bottom: 4px; }
+
+  /* Slide 45: a 3 x 3 confusion matrix */
+  .cm.three td { min-width: 150px; padding: 8px 14px; }
+  .cm.three .big { font-size: 34px; }
+
+  /* Slides 42-44: the trained model and the worked example */
+  .grid-table.model { font-size: 24px; }
+  .grid-table.model th, .grid-table.model td { padding: 6px 18px; font-variant-numeric: tabular-nums; }
+  .grid-table .total { font-weight: 700; }
+  .grid-table .win { background: var(--blue-pale); }
+
+  /* Slide 44: the game. Each row of the second table is one step: its last two cells appear on a click. */
+  .game tr.step { opacity: 1; }
+  .game tr.step td.ans { opacity: 0; transition: opacity 0.25s; }
+  .game tr.step.shown td.ans { opacity: 1; }
+  .game td { font-size: 26px; }
+  .game .wrong-answer { color: #c0392b; font-weight: 700; }
+
+  /* ---------- Part 4: the MNIST digits ---------- */
+  /* Slide 47: ten real digits, shown 3 times larger without smoothing (as on the title slide) */
+  .part .digits-row { display: block; width: 948px; height: 84px; image-rendering: pixelated; margin: 30px 0 20px; }
+  .pixel-figs { display: grid; grid-template-columns: auto auto; gap: 40px; align-items: start; }
+  /* Slide 63: a 10 x 10 confusion matrix */
+  .cm.ten { border-spacing: 3px; font-size: 21px; }
+  .cm.ten th { font-size: 19px; padding: 2px 6px; }
+  .cm.ten td { min-width: 62px; padding: 5px 4px; border-radius: 6px; font-variant-numeric: tabular-nums; }
+  .cm.ten td.right { font-weight: 700; }
+  .cm.ten td.wrong { font-weight: 700; }
+  /* Slide 57: the steps of the demo */
+  ol.demo-steps { margin: 0; padding-left: 1.3em; }
+  ol.demo-steps li { font-size: 29px; margin-bottom: 10px; }
+
+  @media (prefers-reduced-motion: reduce) { .step { transition: none; } }
+  @media print { .step { opacity: 1; } .game tr.step td.ans { opacity: 1; } }
+</style>
+</head>
+<body>
+<div id="deck">
+
+  <!-- 1. Title -->
+  <section class="slide title">
+    <div class="kicker">Probability Theory for CS &middot; Seminar 1</div>
+    <h1>Bayes reads your handwriting</h1>
+    <p class="subtitle">Conditional probability, Bayes' formula and independence, at work in a machine that reads digits.</p>
+    <figure>
+      <!-- The first 0, 1, ..., 9 of the 60,000 MNIST training digits (training indices 1, 3, 5, 7, 2, 0, 13, 15, 17, 4) -->
+      <img src="img/mnist-sample.png" alt="Ten handwritten digits from MNIST: 0 to 9">
+      <figcaption>Real handwritten digits from MNIST</figcaption>
+    </figure>
+    <div class="author">
+      <p class="name">Belal Alashqar</p>
+      <p class="job">PhD student, Phystech School of Applied Mathematics and Computer Science</p>
+    </div>
+  </section>
+
+  <!-- 2. The demo. The demo's "Back to slides" button returns to this slide. -->
+  <section class="slide demo">
+    <h2>The demo</h2>
+    <p>Draw a digit from 0 to 9.</p>
+    <p class="soft">By the end of today, we will build this machine from scratch.</p>
+    <a class="button" id="open-demo" href="../demo/index.html">Open the demo &rarr;</a>
+  </section>
+
+  <!-- 3. The question -->
+  <section class="slide">
+    <h2>Question</h2>
+    <p class="question">A university checks essays with an AI detector. 1% of essays are written by AI. The detector flags 90% of AI essays, and it also wrongly flags 9% of human essays. An essay is flagged. What is the chance that it was written by AI?</p>
+    <div class="options">
+      <div class="option"><b>A</b>&asymp; 90%</div>
+      <div class="option"><b>B</b>&asymp; 50%</div>
+      <div class="option"><b>C</b>&asymp; 9%</div>
+      <div class="option"><b>D</b>&asymp; 1%</div>
+    </div>
+  </section>
+
+  <!-- 4. Counting 1,000 essays -->
+  <section class="slide">
+    <h2>Count 1,000 essays</h2>
+    <svg class="tree" viewBox="0 0 1350 470" width="1350" height="470" aria-label="A tree: 1,000 essays split into AI and human essays, then into flagged and not flagged">
+      <!-- the first split: AI or human -->
+      <g class="node"><rect x="0" y="200" width="250" height="70" rx="12"/><text x="125" y="245" text-anchor="middle" font-size="30" font-weight="600">1,000 essays</text></g>
+      <g class="step">
+        <path class="edge" d="M250 235 C 330 235, 330 95, 420 95"/>
+        <path class="edge" d="M250 235 C 330 235, 330 375, 420 375"/>
+        <text class="rate" x="300" y="130">1%</text>
+        <text class="rate" x="300" y="365">99%</text>
+        <g class="node ai"><rect x="420" y="60" width="330" height="70" rx="12"/><text x="585" y="105" text-anchor="middle" font-size="25"><tspan font-weight="700">10</tspan> written by AI</text></g>
+        <g class="node human"><rect x="420" y="340" width="330" height="70" rx="12"/><text x="585" y="385" text-anchor="middle" font-size="25"><tspan font-weight="700">990</tspan> written by a human</text></g>
+      </g>
+      <!-- the second split: flagged or not -->
+      <g class="step">
+        <path class="edge" d="M750 95 C 820 95, 820 35, 900 35"/>
+        <path class="edge" d="M750 95 C 820 95, 820 155, 900 155"/>
+        <path class="edge" d="M750 375 C 820 375, 820 315, 900 315"/>
+        <path class="edge" d="M750 375 C 820 375, 820 435, 900 435"/>
+        <text class="rate" x="790" y="40">90%</text>
+        <text class="rate" x="790" y="178">10%</text>
+        <text class="rate" x="800" y="320">9%</text>
+        <text class="rate" x="790" y="458">91%</text>
+        <g class="node flagged"><rect x="900" y="5" width="400" height="60" rx="12"/><text x="1100" y="45" text-anchor="middle" font-size="27"><tspan font-weight="700">9</tspan> flagged</text></g>
+        <g class="node"><rect x="900" y="125" width="400" height="60" rx="12"/><text x="1100" y="165" text-anchor="middle" font-size="27"><tspan font-weight="700">1</tspan> not flagged</text></g>
+        <g class="node flagged"><rect x="900" y="285" width="400" height="60" rx="12"/><text x="1100" y="325" text-anchor="middle" font-size="27">about <tspan font-weight="700">89</tspan> flagged</text></g>
+        <g class="node"><rect x="900" y="405" width="400" height="60" rx="12"/><text x="1100" y="445" text-anchor="middle" font-size="27">about <tspan font-weight="700">901</tspan> not flagged</text></g>
+      </g>
+    </svg>
+    <p class="result step">Flagged: 9 + 89 = 98. AI among them: 9. &nbsp;&rarr;&nbsp; <span class="big">9 / 98 &asymp; 9.2%</span> &nbsp;&middot;&nbsp; Answer <strong>C</strong></p>
+  </section>
+
+  <!-- 5. Recall: conditional probability and partition -->
+  <section class="slide">
+    <h2>Recall: conditional probability</h2>
+    <p class="soft">A probability space \((\Omega, \mathcal{F}, P)\): outcomes \(\Omega\), events \(\mathcal{F}\), probability \(P\).</p>
+    <div class="box">
+      <div class="name">Conditional probability</div>
+      <p>\(A, B_i \in \mathcal{F}\), \(\;P(B_i) > 0\): \(\qquad P(A \mid B_i) = \dfrac{P(A \cap B_i)}{P(B_i)}\)</p>
+    </div>
+    <div class="box step">
+      <div class="name">Multiplication theorem (two events)</div>
+      <p>If \(P(B_i) > 0\): \(\qquad P(A \cap B_i) = P(B_i)\, P(A \mid B_i)\)</p>
+    </div>
+    <div class="box step">
+      <div class="name">Partition</div>
+      <p>\(B_1, \dots, B_N\): no two of them overlap, and \(B_1 \cup \dots \cup B_N = \Omega\). <span class="soft">Exactly one of them happens.</span></p>
+    </div>
+  </section>
+
+  <!-- 6. Recall: total probability and Bayes' formula -->
+  <section class="slide">
+    <h2>Recall: Bayes' formula</h2>
+    <div class="box">
+      <div class="name">Total probability formula</div>
+      <p class="when">If \(B_1, \dots, B_N\) is a partition of \(\Omega\) and \(P(B_j) > 0\) for every \(j\), then for every \(A \in \mathcal{F}\):</p>
+      <p>\[ P(A) = \sum_{j=1}^{N} P(A \mid B_j)\, P(B_j) \]</p>
+    </div>
+    <div class="box step">
+      <div class="name">Bayes' formula</div>
+      <p class="when">If, in addition, \(P(A) > 0\), then for every \(i\):</p>
+      <p>\[ P(B_i \mid A) = \frac{P(A \mid B_i)\, P(B_i)}{\sum_{j=1}^{N} P(A \mid B_j)\, P(B_j)} \]</p>
+    </div>
+    <p class="step small soft">Why: \(\;P(B_i \mid A) = \dfrac{P(B_i \cap A)}{P(A)} = \dfrac{P(A \mid B_i)\,P(B_i)}{P(A)}\;\) (conditional probability, then the multiplication theorem), and \(P(A)\) from the total probability formula.</p>
+  </section>
+
+  <!-- 7. The question, solved in course notation -->
+  <section class="slide calc">
+    <h2>The question, in our notation</h2>
+    <p>\(A\) = "the essay is flagged", &nbsp; \(B_1\) = "written by AI", &nbsp; \(B_2\) = "written by a human".</p>
+    <p class="soft">\(B_1, B_2\) is a partition: each essay is written by AI or by a human.</p>
+    <p class="step">Given: &nbsp; \(P(B_1) = 0.01, \;\; P(B_2) = 0.99, \;\; P(A \mid B_1) = 0.90, \;\; P(A \mid B_2) = 0.09\)</p>
+    <p class="step">\(P(A) = 0.90 \cdot 0.01 + 0.09 \cdot 0.99 = 0.009 + 0.0891 = 0.0981 \;>\; 0\)</p>
+    <p class="step">\(P(B_1 \mid A) = \dfrac{0.009}{0.0981} \approx 0.092\) &nbsp; &rarr; &nbsp; <span class="answer">9.2%</span></p>
+  </section>
+
+  <!-- 8. The names of the parts of Bayes' formula -->
+  <section class="slide">
+    <h2>Prior and posterior</h2>
+    <div class="named">\( \underbrace{P(B_i \mid A)}_{\text{posterior}} \;=\; \dfrac{\overbrace{P(A \mid B_i)}^{\text{update}} \;\; \overbrace{P(B_i)}^{\text{prior}}}{\underbrace{P(A)}_{\text{normalization constant}}} \)</div>
+    <div class="labels step">
+      <div><span class="hand">prior</span>the belief in \(B_i\) before we see the evidence</div>
+      <div><span class="hand">posterior</span>the updated belief in \(B_i\) after we see the evidence \(A\)</div>
+      <div><span class="hand">belief</span>\(B_i\): what we want to know but cannot see</div>
+      <div><span class="hand">evidence</span>\(A\): what we see</div>
+    </div>
+    <p class="step" style="margin-top: 40px">The essays: prior \(P(B_1) = 1\%\) &nbsp;&rarr;&nbsp; posterior \(P(B_1 \mid A) \approx 9.2\%\).</p>
+  </section>
+
+  <!-- 9. What if the prior were different? -->
+  <section class="slide calc">
+    <h2>What if 10% of essays were written by AI?</h2>
+    <p class="soft">The same detector: \(P(A \mid B_1) = 0.90, \;\; P(A \mid B_2) = 0.09\).</p>
+    <p class="soft">The new prior: \(P(B_1) = 0.10, \;\; P(B_2) = 0.90\).</p>
+    <p class="step">\(P(A) = 0.90 \cdot 0.10 + 0.09 \cdot 0.90 = 0.09 + 0.081 = 0.171\)</p>
+    <p class="step">\(P(B_1 \mid A) = \dfrac{0.09}{0.171} \approx 0.526\) &nbsp; &rarr; &nbsp; <span class="answer">52.6%</span></p>
+    <div class="compare step">
+      <div>Prior 1% &nbsp;&rarr;&nbsp; posterior <strong>9.2%</strong></div>
+      <div>Prior 10% &nbsp;&rarr;&nbsp; posterior <strong>52.6%</strong></div>
+    </div>
+  </section>
+
+
+  <!-- ============================== Part 2: the spam filter problem ============================== -->
+
+  <!-- 10. A real spam message -->
+  <section class="slide part">
+    <div class="kicker">Part 2</div>
+    <h1>The spam filter problem</h1>
+    <div class="sms">
+      <div class="from">A real SMS from the SMS Spam Collection</div>
+      WINNER!! As a valued network customer you have been selected to receivea &pound;900 prize reward! To claim call 09061701461. Claim code KL341. Valid 12 hours only.
+    </div>
+    <p class="step">Your phone decides in a millisecond: <span class="tag spam">spam</span> or <span class="tag ham">ham</span>? &nbsp;How?</p>
+  </section>
+
+  <!-- 11. Classification -->
+  <section class="slide">
+    <h2>Classification</h2>
+    <div class="pipe">
+      <div class="stage">a message</div><div class="arrow">&rarr;</div>
+      <div class="stage model">classifier</div><div class="arrow">&rarr;</div>
+      <div class="stage"><span class="tag ham">ham</span> or <span class="tag spam">spam</span></div>
+    </div>
+    <ul>
+      <li><b>Classification:</b> take an input and return one class from a fixed set of classes.</li>
+      <li class="step"><b>Supervised learning:</b> we learn from messages whose true class is known: the <b>gold label</b>, given by people.</li>
+      <li class="step"><b>Classifier:</b> the rule we learn from these data.</li>
+    </ul>
+  </section>
+
+  <!-- 12. Training set, test set, cross-validation -->
+  <section class="slide">
+    <h2>Is the classifier good? Test it on new messages</h2>
+    <div class="split"><div class="train">training set: learn from these</div><div class="test">test set</div></div>
+    <p class="small soft" style="margin-top:-20px">The test set stays hidden until the end. Testing on the training messages would be cheating.</p>
+    <div class="step">
+      <p><b>\(k\)-fold cross-validation</b>: split the data into \(k\) folds; \(k\) times, train on \(k-1\) folds and test on the remaining one; average the \(k\) results.</p>
+      <div class="folds">
+        <div class="run">run 1</div><div class="held"></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>
+        <div class="run">run 2</div><div></div><div class="held"></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>
+        <div class="run">run 3</div><div></div><div></div><div class="held"></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div>
+        <div class="run">&hellip;</div><div style="background:none"></div><div style="background:none"></div><div style="background:none"></div><div style="background:none"></div><div style="background:none"></div><div style="background:none"></div><div style="background:none"></div><div style="background:none"></div><div style="background:none"></div><div style="background:none"></div>
+        <div class="run">run 10</div><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div></div><div class="held"></div>
+      </div>
+      <p class="small soft" style="margin-top:14px">\(k = 10\): blue = the fold we test on, yellow = the folds we train on.</p>
+    </div>
+  </section>
+
+  <!-- 13. Confusion matrix, precision, recall -->
+  <section class="slide">
+    <h2>The confusion matrix</h2>
+    <p class="soft">Spam is the <b>positive</b> class, ham the <b>negative</b> class.</p>
+    <table class="cm">
+      <tr><th></th><th>gold: spam</th><th>gold: ham</th></tr>
+      <tr><th>predicted: spam</th><td class="right"><span class="big">TP</span><br><span class="small">true positive</span></td><td class="wrong"><span class="big">FP</span><br><span class="small">false positive</span></td></tr>
+      <tr><th>predicted: ham</th><td class="wrong"><span class="big">FN</span><br><span class="small">false negative</span></td><td class="right"><span class="big">TN</span><br><span class="small">true negative</span></td></tr>
+    </table>
+    <div class="formulas step">
+      <div>\(\text{precision} = \dfrac{\text{TP}}{\text{TP} + \text{FP}}\)</div>
+      <div>\(\text{recall} = \dfrac{\text{TP}}{\text{TP} + \text{FN}}\)</div>
+      <div>\(\text{accuracy} = \dfrac{\text{TP} + \text{TN}}{\text{TP} + \text{FP} + \text{FN} + \text{TN}}\)</div>
+      <div class="note">Of the messages called spam, how many are spam?</div>
+      <div class="note">Of the real spam, how much do we catch?</div>
+      <div class="note">How many messages are right?</div>
+    </div>
+  </section>
+
+  <!-- 14. The AI detector, seen as a classifier -->
+  <section class="slide calc">
+    <h2>Remember the AI detector?</h2>
+    <p>Positive class = written by AI. &nbsp;Of 1,000 essays: &nbsp;TP = 9, &nbsp;FN = 1, &nbsp;FP &asymp; 89, &nbsp;TN &asymp; 901.</p>
+    <p class="step">\(\text{recall} = \dfrac{9}{9 + 1} = 90\% \;=\; P(A \mid B_1)\)</p>
+    <p class="step">\(\text{precision} = \dfrac{9}{9 + 89} \approx 9.2\% \;=\; P(B_1 \mid A)\)</p>
+    <p class="step"><span class="trap">A great recall, a terrible precision.</span> &nbsp;Precision is a posterior: it depends on the prior.</p>
+  </section>
+
+  <!-- 15. The accuracy trap -->
+  <section class="slide">
+    <h2>Trap question: a lazy filter</h2>
+    <p class="question" style="margin-bottom:30px">In our SMS data, 87.4% of the messages are ham. A filter answers <span class="tag ham">ham</span> for every message, without reading it. What is its accuracy? Is it a good filter?</p>
+    <div class="step">
+      <p>accuracy = <b>87.4%</b> &nbsp;&middot;&nbsp; recall = \(\dfrac{0}{0 + \text{FN}}\) = <b>0</b>: it never catches a spam.</p>
+      <p class="soft">Accuracy is misleading when one class is rare. So we look at precision and recall.</p>
+    </div>
+  </section>
+
+  <!-- 16. The toy data -->
+  <section class="slide">
+    <h2>A tiny made-up training set</h2>
+    <p class="soft">12 messages written with only 5 words: free, win, money, lunch, meeting.</p>
+    <div class="toy">
+      <div class="col"><h3><span class="tag ham">ham</span> &nbsp;8 messages</h3>
+        <ol><li>lunch meeting</li><li>meeting lunch</li><li>free lunch</li><li>lunch money</li><li>meeting</li><li>meeting money</li><li>lunch</li><li>meeting lunch meeting</li></ol></div>
+      <div class="col"><h3><span class="tag spam">spam</span> &nbsp;4 messages</h3>
+        <ol style="columns:1"><li>free money</li><li>win money</li><li>win free free</li><li>free win money money</li></ol></div>
+    </div>
+    <p class="step" style="margin-top:30px">New messages: &nbsp;<b>"free money"</b> &nbsp;and&nbsp; <b>"free win money meeting"</b>. Ham or spam?</p>
+  </section>
+
+  <!-- 17. Bag of words -->
+  <section class="slide">
+    <h2>A message is a bag of words</h2>
+    <p>We keep only <b>how many times</b> each word appears. The order is thrown away.</p>
+    <table class="grid-table" style="margin:10px 0 30px">
+      <tr><th>message</th><th>free</th><th>win</th><th>money</th><th>lunch</th><th>meeting</th></tr>
+      <tr><td class="label">"win free free"</td><td>2</td><td>1</td><td>0</td><td>0</td><td>0</td></tr>
+      <tr><td class="label">"free win free"</td><td>2</td><td>1</td><td>0</td><td>0</td><td>0</td></tr>
+    </table>
+    <div class="step">
+      <p>\(V\) = the <b>vocabulary</b>: all words of the training messages, &nbsp;\(\lvert V \rvert = 5\).</p>
+      <p>\(\xi_w\) = how many times the word \(w\) appears in the message. &nbsp;\(\xi = (\xi_w)_{w \in V}\): the bag of words.</p>
+      <p>\(x = (x_w)_{w \in V}\): its observed value. &nbsp;\(n = \sum_{w \in V} x_w\): the length. &nbsp;\(\eta\): the class, ham or spam.</p>
+    </div>
+  </section>
+
+  <!-- 18. Recall: independence, conditional independence -->
+  <section class="slide">
+    <h2>Recall: conditional independence</h2>
+    <div class="box">
+      <div class="name">Independence (two events)</div>
+      <p>\(P(G_1 \cap G_2) = P(G_1)\, P(G_2)\)</p>
+    </div>
+    <div class="box step">
+      <div class="name">Conditional independence given \(H\)</div>
+      <p class="when">If \(P(H) > 0\): &nbsp;\(G_1\) and \(G_2\) are conditionally independent given \(H\) if</p>
+      <p>\[ P(G_1 \cap G_2 \mid H) = P(G_1 \mid H)\, P(G_2 \mid H) \]</p>
+      <p class="when">The same with \(P(\,\cdot \mid H)\) in place of \(P\). For several events: the product rule for every choice of some of them.</p>
+    </div>
+    <p class="step soft">Neither one implies the other.</p>
+  </section>
+
+  <!-- 19. The naive Bayes assumption and the multinomial distribution -->
+  <section class="slide">
+    <h2>Why the multinomial distribution?</h2>
+    <p><b>Naive Bayes assumption:</b> given the class \(\eta = c\), the words of a message are conditionally independent: each word is drawn on its own, and it is \(w\) with probability \(p_c(w)\).</p>
+    <p class="step">Like rolling a die with \(\lvert V \rvert\) faces \(n\) times. The counts of the faces have the <b>multinomial distribution</b>:</p>
+    <div class="box step">
+      <div class="name">The multinomial model of a message</div>
+      <p class="when">Assumptions: (1) bag of words, (2) naive Bayes assumption, (3) the length \(n\) says nothing about the class.</p>
+      <p>\[ P(\xi = x \mid \eta = c) = \frac{n!}{\prod_{w \in V} x_w!}\, \prod_{w \in V} p_c(w)^{x_w} \]</p>
+    </div>
+    <p class="step soft">2 faces: the binomial distribution. The coefficient: the multinomial theorem. &nbsp;<span class="trap">"Naive": real words are not independent.</span></p>
+  </section>
+
+  <!-- 20. The multinomial naive Bayes classifier -->
+  <section class="slide calc">
+    <h2>The naive Bayes classifier</h2>
+    <p>Bayes' formula: partition \(B_1 = \{\eta = \text{ham}\},\; B_2 = \{\eta = \text{spam}\}\), &nbsp;evidence \(A = \{\xi = x\}\)</p>
+    <p class="step">\(P(\eta = c \mid \xi = x) = \dfrac{P(\xi = x \mid \eta = c)\, P(\eta = c)}{P(\xi = x)}\)</p>
+    <p class="step soft">\(P(\xi = x)\) and \(\frac{n!}{\prod x_w!}\) are the same for both classes: they cannot change which class wins.</p>
+    <p class="step">\(\hat{c} = \operatorname*{argmax}_{c}\; \hat{P}(\eta = c) \prod_{w \in V} \hat{p}_c(w)^{x_w}\)</p>
+    <p class="step soft">The hat \(\hat{\ }\) means "estimated from the training data". \(\hat{c}\): the predicted class.</p>
+  </section>
+
+  <!-- 21. Training = counting -->
+  <section class="slide">
+    <h2>Training = counting</h2>
+    <p>Prior: &nbsp;\(\hat{P}(\eta = c) = \dfrac{m_c}{m}\): &nbsp; \(\hat{P}(\eta = \text{ham}) = \dfrac{8}{12}, \;\; \hat{P}(\eta = \text{spam}) = \dfrac{4}{12}\)</p>
+    <p class="step">\(\text{count}(w, c)\): how often \(w\) appears in all training messages of class \(c\).</p>
+    <table class="grid-table step" style="margin:6px 0 24px">
+      <tr><th></th><th>free</th><th>win</th><th>money</th><th>lunch</th><th>meeting</th><th>all words</th></tr>
+      <tr><td class="label"><span class="tag ham">ham</span></td><td>1</td><td class="zero">0</td><td>2</td><td>6</td><td>6</td><td>15</td></tr>
+      <tr><td class="label"><span class="tag spam">spam</span></td><td>4</td><td>3</td><td>4</td><td class="zero">0</td><td class="zero">0</td><td>11</td></tr>
+    </table>
+    <p class="step">First try: &nbsp;\(p_c(w) \approx \dfrac{\text{count}(w, c)}{\sum_{w' \in V} \text{count}(w', c)}\), &nbsp; e.g. \(p_{\text{spam}}(\text{free}) \approx \dfrac{4}{11}\)</p>
+  </section>
+
+  <!-- 22. Test 1: "free money" -->
+  <section class="slide calc">
+    <h2>"free money": ham or spam?</h2>
+    <p>ham: &nbsp; \(\dfrac{8}{12} \cdot \dfrac{1}{15} \cdot \dfrac{2}{15} = \dfrac{4}{675} \approx 0.0059\)</p>
+    <p>spam: &nbsp; \(\dfrac{4}{12} \cdot \dfrac{4}{11} \cdot \dfrac{4}{11} = \dfrac{16}{363} \approx 0.0441\)</p>
+    <p class="step">Spam wins. &nbsp;Normalize (Bayes' formula): &nbsp;\(\dfrac{0.0441}{0.0441 + 0.0059} \approx\) <span class="answer">0.88</span> &nbsp;spam.</p>
+    <p class="step soft">"free" also appears in ham ("free lunch"): one word is not a proof.</p>
+  </section>
+
+  <!-- 23. Test 2: the trap -->
+  <section class="slide calc">
+    <h2>"free win money meeting": ham or spam?</h2>
+    <p>ham: &nbsp; \(\dfrac{8}{12} \cdot \dfrac{1}{15} \cdot \dfrac{\mathbf{0}}{15} \cdot \dfrac{2}{15} \cdot \dfrac{6}{15} = 0\) &nbsp;<span class="soft">("win" never appears in ham)</span></p>
+    <p class="step">spam: &nbsp; \(\dfrac{4}{12} \cdot \dfrac{4}{11} \cdot \dfrac{3}{11} \cdot \dfrac{4}{11} \cdot \dfrac{\mathbf{0}}{11} = 0\) &nbsp;<span class="soft">("meeting" never appears in spam)</span></p>
+    <p class="step"><span class="trap">0 against 0: the model cannot decide!</span></p>
+    <p class="step">One word never seen in a class makes the whole product 0, whatever the other words say.</p>
+  </section>
+
+  <!-- 24. Laplace smoothing -->
+  <section class="slide calc">
+    <h2>The fix: Laplace smoothing</h2>
+    <div class="box">
+      <div class="name">Add 1 to every count</div>
+      <p>\[ \hat{p}_c(w) = \frac{\text{count}(w, c) + 1}{\sum_{w' \in V} \text{count}(w', c) + \lvert V \rvert} \]</p>
+    </div>
+    <p class="step">ham: &nbsp; \(\dfrac{8}{12} \cdot \dfrac{2}{20} \cdot \dfrac{1}{20} \cdot \dfrac{3}{20} \cdot \dfrac{7}{20} \approx 0.000175\) &nbsp;&nbsp; spam: &nbsp; \(\dfrac{4}{12} \cdot \dfrac{5}{16} \cdot \dfrac{4}{16} \cdot \dfrac{5}{16} \cdot \dfrac{1}{16} \approx 0.000509\)</p>
+    <p class="step">\(\hat{P}(\eta = \text{spam} \mid \xi = x) = \dfrac{0.000509}{0.000509 + 0.000175} \approx\) <span class="answer">0.74</span> &nbsp;&rarr; spam.</p>
+    <p class="step small soft">A word not in \(V\) at all (an <b>unknown word</b>) is simply removed from the message.</p>
+  </section>
+
+  <!-- 25. Logarithms -->
+  <section class="slide">
+    <h2>One more problem: underflow</h2>
+    <p>A real message has many words. A product of many small numbers becomes exactly <b>0.0</b> in the computer.</p>
+    <p class="step soft">In the notebook: a message of 600 words &rarr; product of probabilities = 0.0, &nbsp;sum of logarithms = &minus;944.9.</p>
+    <div class="box step">
+      <div class="name">The classifier, in logarithms</div>
+      <p>\[ \hat{c} = \operatorname*{argmax}_{c} \Big[ \log \hat{P}(\eta = c) + \sum_{w \in V} x_w \log \hat{p}_c(w) \Big] \]</p>
+      <p class="when">The logarithm is increasing, so the same class wins. &nbsp;\(\log\) = natural logarithm.</p>
+    </div>
+  </section>
+
+  <!-- 26. Naive Bayes vs a large language model -->
+  <section class="slide">
+    <h2>Naive Bayes vs ChatGPT</h2>
+    <p>A <b>language model</b> gives a probability to each possible next word, given the words before it. Large language models are trained to predict the next word.</p>
+    <p class="step">Naive Bayes is a <b>unigram</b> language model, one per class: \(p_c(w)\) does not look at the words before.</p>
+    <div class="sentences step">
+      <p class="soft small" style="border:none;background:none;padding:0;margin-bottom:6px"><span class="trap">Which sentence is more likely?</span></p>
+      <p>all of a sudden I notice three guys standing on the sidewalk</p>
+      <p>on guys all I of notice sidewalk three a sudden standing the</p>
+    </div>
+    <p class="step">Naive Bayes: <b>exactly the same</b> probability (the same bag of words). A language model: the first, by far.</p>
+  </section>
+
+  <!-- 27. The real data -->
+  <section class="slide">
+    <h2>The real data: SMS Spam Collection</h2>
+    <ul>
+      <li>Almeida and Gómez Hidalgo (2011), UCI Machine Learning Repository, licence CC BY 4.0.</li>
+      <li>5,574 SMS messages, each with its gold label.</li>
+      <li class="step">403 repeated messages removed &rarr; <b>5,171</b> messages: <b>4,518 ham</b>, <b>653 spam</b>.</li>
+    </ul>
+    <div class="two step" style="margin-top:20px">
+      <div class="sms" style="margin:0"><div class="from"><span class="tag ham">ham</span></div>Nah I don't think he goes to usf, he lives around here though</div>
+      <div class="sms" style="margin:0"><div class="from"><span class="tag spam">spam</span></div>Had your mobile 11 months or more? U R entitled to Update to the latest colour mobiles with camera for Free! Call The Mobile Update Co FREE on 08002986030</div>
+    </div>
+  </section>
+
+  <!-- 28. EDA: classes and words -->
+  <section class="slide">
+    <h2>A first look at the data</h2>
+    <div class="balance"><div class="ham">ham 4,518 (87.4%)</div><div class="spam">spam 653</div></div>
+    <p class="small soft">Most messages are ham: the lazy "always ham" filter gets 87.4% accuracy.</p>
+    <div class="words step">
+      <div><b>Most common words in ham</b><br>i, you, to, the, a, u, and, in, me, my</div>
+      <div><b>Most common words in spam</b><br>to, a, call, you, your, free, 2, for, the, now</div>
+    </div>
+    <p class="step small soft" style="margin-top:20px">We keep every word: common words like "to" and "a" are not removed.</p>
+  </section>
+
+  <!-- 29. EDA: message length -->
+  <section class="slide">
+    <h2>Spam messages are longer</h2>
+    <img src="img/spam-length.png" alt="Histogram of the number of words per message: ham messages have a median of 11 words, spam messages a median of 27 words" style="width:1250px">
+    <p class="step">Assumption (3) said: the length \(n\) says nothing about the class. <span class="trap">False!</span>&nbsp; The model is naive, on purpose.</p>
+  </section>
+
+  <!-- 30. Evaluation of our classifier -->
+  <section class="slide">
+    <h2>How good is our spam filter?</h2>
+    <p class="soft">Trained on 4,136 messages (80%), tested on 1,035 new ones (20%).</p>
+    <div class="two" style="grid-template-columns: auto 1fr; gap: 60px">
+      <table class="cm">
+        <tr><th></th><th>gold: spam</th><th>gold: ham</th></tr>
+        <tr><th>predicted: spam</th><td class="right"><span class="big">114</span></td><td class="wrong"><span class="big">2</span></td></tr>
+        <tr><th>predicted: ham</th><td class="wrong"><span class="big">12</span></td><td class="right"><span class="big">907</span></td></tr>
+      </table>
+      <div class="step">
+        <p>precision = 114 / 116 &asymp; <b>0.983</b></p>
+        <p>recall = 114 / 126 &asymp; <b>0.905</b></p>
+        <p>accuracy &asymp; <b>0.986</b></p>
+        <p class="small soft">"always ham" on the same test set: accuracy 0.878, recall 0.</p>
+      </div>
+    </div>
+    <p class="step small soft" style="margin-top:20px">10-fold cross-validation on the training set (mean): precision 0.972, recall 0.919, accuracy 0.986.</p>
+  </section>
+
+  <!-- 31. To the notebook, and further reading -->
+  <section class="slide">
+    <h2>To the notebook, and further reading</h2>
+    <a class="button" style="margin-top:0" href="http://localhost:8888/lab/tree/notebooks/spam.ipynb" target="_blank" rel="noopener">Open the notebook &rarr;</a>
+    <p class="small soft" style="margin:10px 0 22px">Opens <code>notebooks/spam.ipynb</code> in JupyterLab, started in the project folder (port 8888).</p>
+    <div class="box reading">
+      <div class="name">Bayes' formula</div>
+      <p><a href="https://www.3blue1brown.com/lessons/bayes-theorem" target="_blank" rel="noopener">3Blue1Brown: "Bayes' theorem"</a></p>
+      <p class="when">Watch the video or read the lesson. Look at the "Steve" example (librarian or farmer?): why the prior matters, the same lesson as our AI-detector question.</p>
+    </div>
+    <div class="box reading">
+      <div class="name">The spam filter</div>
+      <p><a href="https://web.stanford.edu/~jurafsky/slp3/B.pdf" target="_blank" rel="noopener">Jurafsky &amp; Martin, Appendix B (PDF)</a></p>
+      <p class="when">Read sections B.1&ndash;B.3 (pp. 1&ndash;7): the naive Bayes classifier, training, Laplace smoothing, a worked example. Then sections B.7&ndash;B.8 (pp. 11&ndash;15): the confusion matrix, precision, recall, cross-validation. Optional: section B.6 (pp. 10&ndash;11), naive Bayes as a language model.</p>
+    </div>
+    <p class="step"><span class="trap">Challenge: write a spam message that the filter calls ham.</span></p>
+  </section>
+
+
+  <!-- ============================== Part 3: the Iris flower problem ============================== -->
+
+  <!-- 32. Three species of iris -->
+  <section class="slide part">
+    <div class="kicker">Part 3</div>
+    <h1>The Iris flower problem</h1>
+    <img src="img/iris.png" alt="Three iris flowers: iris setosa, iris versicolor and iris virginica, with a petal and a sepal marked on each" style="width:1000px; margin:16px 0 6px">
+    <p class="step">We measure a flower with a ruler. Can a machine tell its species?</p>
+  </section>
+
+  <!-- 33. The data -->
+  <section class="slide">
+    <h2>The data: 150 iris flowers</h2>
+    <ul>
+      <li>3 species: <span class="tag setosa">setosa</span> <span class="tag versicolor">versicolor</span> <span class="tag virginica">virginica</span>, 50 flowers of each.</li>
+      <li>4 measurements of each flower, in cm: sepal length, sepal width, petal length, petal width.</li>
+      <li class="small soft">First used by R. A. Fisher (1936); "perhaps the best known database to be found in the pattern recognition literature".</li>
+    </ul>
+    <table class="grid-table data step" style="margin:4px 0 16px">
+      <tr><th>flower</th><th>sepal length</th><th>sepal width</th><th>petal length</th><th>petal width</th><th>species</th></tr>
+      <tr><td>1</td><td>5.1</td><td>3.5</td><td>1.4</td><td>0.2</td><td><span class="tag setosa">setosa</span></td></tr>
+      <tr><td>51</td><td>7.0</td><td>3.2</td><td>4.7</td><td>1.4</td><td><span class="tag versicolor">versicolor</span></td></tr>
+      <tr><td>101</td><td>6.3</td><td>3.3</td><td>6.0</td><td>2.5</td><td><span class="tag virginica">virginica</span></td></tr>
+    </table>
+    <div class="step">
+      <p>\(\zeta = (\zeta_1, \zeta_2, \zeta_3, \zeta_4)\): the 4 measurements of a flower, a random vector. &nbsp;\(z = (z_1, z_2, z_3, z_4)\): its observed value.</p>
+      <p>\(\eta\): the class, now one of the 3 species. &nbsp;The measurements are the <b>features</b> of a flower.</p>
+    </div>
+  </section>
+
+  <!-- 34. EDA: scatter plot -->
+  <section class="slide">
+    <h2>A first look at the data</h2>
+    <img src="img/iris-scatter.png" alt="Scatter plot of petal length against petal width: setosa flowers form a separate group at the bottom left; versicolor and virginica overlap a little" style="height:560px; align-self:flex-start">
+    <p class="step">Setosa is easy. Versicolor and virginica overlap a little: there the machine will make its mistakes.</p>
+  </section>
+
+  <!-- 35. Recall: PDF and the normal distribution -->
+  <section class="slide">
+    <h2>Recall: PDF and the normal distribution</h2>
+    <p class="soft">Words were counted: 0, 1, 2, &hellip; &nbsp;Lengths are real numbers. We need densities.</p>
+    <div class="box">
+      <div class="name">PDF</div>
+      <p>\(\zeta_\ell\) has the PDF \(f_{\zeta_\ell} \ge 0\) if, for all \(\alpha \le \beta\): \(\qquad P(\alpha \le \zeta_\ell \le \beta) = \displaystyle\int_{\alpha}^{\beta} f_{\zeta_\ell}(t)\, dt\)</p>
+      <p class="when">Probability = area under the PDF. &nbsp;The whole area: \(\int_{-\infty}^{+\infty} f_{\zeta_\ell}(t)\, dt = 1\).</p>
+    </div>
+    <div class="box step">
+      <div class="name">Normal (Gaussian) distribution</div>
+      <p>\(\mathcal{N}(a, \sigma^2)\) has the PDF \(\quad \dfrac{1}{\sqrt{2\pi\sigma^2}}\, e^{-\frac{(t - a)^2}{2\sigma^2}}\)</p>
+      <p class="when">mean \(a\), &nbsp;variance \(\sigma^2\), &nbsp;standard deviation \(\sigma = \sqrt{\sigma^2}\)</p>
+    </div>
+    <p class="step small soft">Carlos writes a PDF as \(p\). Here \(p\) is taken by the word probabilities \(p_c(w)\), so we write \(f\).</p>
+  </section>
+
+  <!-- 36. Trap question: a density is not a probability -->
+  <section class="slide">
+    <h2>Trap question: a probability of 3.82?</h2>
+    <p class="question" style="margin-bottom:30px">Setosa petal width: mean 0.25 cm, standard deviation 0.10 cm. Its normal PDF at 0.25 cm is <b>3.82</b>. So the probability that a setosa petal is exactly 0.25 cm wide is 3.82?</p>
+    <div class="step">
+      <p>No. 3.82 is a <b>density</b>, not a probability. A PDF can be larger than 1.</p>
+      <p>Exactly 0.25 cm: probability <b>0</b>. &nbsp;An interval has a probability. In the fitted normal model: &nbsp;\(P(0.24 \le \zeta_4 \le 0.26 \mid \eta = \text{setosa}) \approx 0.076 \approx 3.82 \cdot 0.02\)</p>
+      <p class="soft">area &asymp; height &times; width</p>
+    </div>
+  </section>
+
+  <!-- 37. Why the normal distribution? -->
+  <section class="slide">
+    <h2>Why the normal distribution?</h2>
+    <img src="img/iris-normal.png" alt="For each of the 4 features: the histogram of each species, and the normal PDF fitted to it. The histograms are roughly bell-shaped." style="width:1290px">
+    <table class="grid-table step" style="margin-top:14px; font-size:24px">
+      <tr><th></th><th>spam</th><th>iris</th></tr>
+      <tr><td class="label">features</td><td>word counts \(x_w\): 0, 1, 2, &hellip;</td><td>lengths \(z_\ell\) in cm: real numbers</td></tr>
+      <tr><td class="label">given the class</td><td>multinomial distribution</td><td>a normal distribution for each feature</td></tr>
+      <tr><td class="label">we compute</td><td>probabilities \(P(\xi = x \mid \eta = c)\)</td><td>densities \(f_{\zeta \mid \eta}(z \mid c)\)</td></tr>
+    </table>
+    <p class="step" style="margin-top:16px"><span class="trap">The fitted normal gives setosa a negative petal width with probability &asymp; 0.009!</span> &nbsp;Only an approximation.</p>
+  </section>
+
+  <!-- 38. Bayes' formula with a density -->
+  <section class="slide">
+    <h2>Bayes' formula with a density</h2>
+    <p>Bayes' formula needs \(P(A) > 0\). &nbsp;But \(P(\zeta = z) = 0\) for every \(z\)!</p>
+    <div class="box step">
+      <div class="name">Bayes' formula with a density</div>
+      <p class="when">If \(P(\eta = c) > 0\) for every class \(c\), \(\zeta\) has a conditional PDF \(f_{\zeta \mid \eta}(\cdot \mid c)\) given each class, and \(f_\zeta(z) > 0\):</p>
+      <p>\[ P(\eta = c \mid \zeta = z) = \frac{f_{\zeta \mid \eta}(z \mid c)\, P(\eta = c)}{\sum_{c'} f_{\zeta \mid \eta}(z \mid c')\, P(\eta = c')} \]</p>
+    </div>
+    <p class="step soft">Why: replace \(\{\zeta = z\}\) by a tiny box around \(z\). Its probability &asymp; density &times; size of the box, and the size cancels in the fraction.</p>
+    <p class="step">The same story: posterior = update &times; prior / normalization constant. &nbsp;The update is now a density.</p>
+  </section>
+
+  <!-- 39. The naive Bayes assumption for the iris flowers -->
+  <section class="slide">
+    <h2>The naive Bayes assumption, again</h2>
+    <p>A density of 4 variables is hard to estimate from 150 flowers. &nbsp;So we assume:</p>
+    <div class="box step">
+      <div class="name">Naive Bayes assumption</div>
+      <p>Given \(\eta = c\), the features \(\zeta_1, \dots, \zeta_4\) are mutually conditionally independent: independent under \(P(\,\cdot \mid \eta = c)\). Then</p>
+      <p>\[ f_{\zeta \mid \eta}(z \mid c) = \prod_{\ell=1}^{4} f_{\zeta_\ell \mid \eta}(z_\ell \mid c) \]</p>
+      <p class="when">For independent random variables, the PDF of the vector is the product of their PDFs.</p>
+    </div>
+    <p class="step">Spam: the words, given the class. &nbsp;Iris: the 4 measurements, given the species. &nbsp;The same idea.</p>
+  </section>
+
+  <!-- 40. The Gaussian naive Bayes classifier -->
+  <section class="slide calc">
+    <h2>Gaussian naive Bayes</h2>
+    <p><b>Gaussian:</b> given \(\eta = c\), each \(\zeta_\ell \sim \mathcal{N}(a_{c,\ell}, \sigma^2_{c,\ell})\). &nbsp;<span class="soft">3 &times; 4 = 12 normal distributions.</span></p>
+    <p class="step">\(f_{\zeta \mid \eta}(z \mid c) = \displaystyle\prod_{\ell=1}^{4} \frac{1}{\sqrt{2\pi\sigma^2_{c,\ell}}}\, e^{-\frac{(z_\ell - a_{c,\ell})^2}{2\sigma^2_{c,\ell}}}\)</p>
+    <p class="step soft small">The denominator of Bayes' formula is the same for all species: it cannot change which species wins.</p>
+    <div class="box step">
+      <div class="name">The classifier, in logarithms</div>
+      <p>\[ \hat{c} = \operatorname*{argmax}_{c} \Big[ \log \hat{P}(\eta = c) + \sum_{\ell=1}^{4} \log \hat{f}_{\zeta_\ell \mid \eta}(z_\ell \mid c) \Big] \]</p>
+      <p class="when">\(\hat{f}_{\zeta_\ell \mid \eta}(\cdot \mid c)\): the normal PDF with the estimates \(\hat{a}_{c,\ell}\), \(\hat{\sigma}^2_{c,\ell}\).</p>
+    </div>
+  </section>
+
+  <!-- 41. Is the independence assumption correct? -->
+  <section class="slide">
+    <h2>Is the independence assumption correct?</h2>
+    <p class="soft small" style="margin-bottom:12px">Recall: \(\operatorname{corr}(\zeta_\ell, \zeta_{\ell'}) = \frac{\operatorname{cov}(\zeta_\ell, \zeta_{\ell'})}{\sqrt{\operatorname{Var}\zeta_\ell}\sqrt{\operatorname{Var}\zeta_{\ell'}}} \in [-1, 1]\). &nbsp;Independent \(\Rightarrow\) cov = 0 \(\Rightarrow\) corr = 0. &nbsp;So corr far from 0 means <b>not</b> independent.</p>
+    <div class="two" style="gap:70px; max-width:1300px">
+      <div>
+        <div class="corr-title">All 150 flowers</div>
+        <table class="corr">
+          <tr><th></th><th>SL</th><th>SW</th><th>PL</th><th>PW</th></tr>
+          <tr><th>SL</th><td class="diag">1</td><td style="background: rgba(42, 120, 214, 0.06)">&minus;0.12</td><td style="background: rgba(42, 120, 214, 0.48)">0.87</td><td style="background: rgba(42, 120, 214, 0.45)">0.82</td></tr>
+          <tr><th>SW</th><td style="background: rgba(42, 120, 214, 0.06)">&minus;0.12</td><td class="diag">1</td><td style="background: rgba(42, 120, 214, 0.24)">&minus;0.43</td><td style="background: rgba(42, 120, 214, 0.20)">&minus;0.37</td></tr>
+          <tr><th>PL</th><td style="background: rgba(42, 120, 214, 0.48)">0.87</td><td style="background: rgba(42, 120, 214, 0.24)">&minus;0.43</td><td class="diag">1</td><td style="background: rgba(42, 120, 214, 0.53)">0.96</td></tr>
+          <tr><th>PW</th><td style="background: rgba(42, 120, 214, 0.45)">0.82</td><td style="background: rgba(42, 120, 214, 0.20)">&minus;0.37</td><td style="background: rgba(42, 120, 214, 0.53)">0.96</td><td class="diag">1</td></tr>
+        </table>
+      </div>
+      <div class="step">
+        <div class="corr-title">Only the 50 <span class="tag virginica">virginica</span></div>
+        <table class="corr">
+          <tr><th></th><th>SL</th><th>SW</th><th>PL</th><th>PW</th></tr>
+          <tr><th>SL</th><td class="diag">1</td><td style="background: rgba(42, 120, 214, 0.25)">0.46</td><td style="background: rgba(42, 120, 214, 0.48)">0.86</td><td style="background: rgba(42, 120, 214, 0.15)">0.28</td></tr>
+          <tr><th>SW</th><td style="background: rgba(42, 120, 214, 0.25)">0.46</td><td class="diag">1</td><td style="background: rgba(42, 120, 214, 0.22)">0.40</td><td style="background: rgba(42, 120, 214, 0.30)">0.54</td></tr>
+          <tr><th>PL</th><td style="background: rgba(42, 120, 214, 0.48)">0.86</td><td style="background: rgba(42, 120, 214, 0.22)">0.40</td><td class="diag">1</td><td style="background: rgba(42, 120, 214, 0.18)">0.32</td></tr>
+          <tr><th>PW</th><td style="background: rgba(42, 120, 214, 0.15)">0.28</td><td style="background: rgba(42, 120, 214, 0.30)">0.54</td><td style="background: rgba(42, 120, 214, 0.18)">0.32</td><td class="diag">1</td></tr>
+        </table>
+      </div>
+    </div>
+    <p class="small soft" style="margin:6px 0 10px">SL, SW = sepal length, sepal width &nbsp;&middot;&nbsp; PL, PW = petal length, petal width</p>
+    <p class="step" style="margin-bottom:6px"><span class="trap">PL and PW: 0.96! Does this break naive Bayes?</span> &nbsp;Not by itself: the assumption is about one species at a time.</p>
+    <p class="step">Inside virginica: PL and PW 0.32, but SL and PL <b>0.86</b>. The assumption is <b>false</b>.</p>
+  </section>
+
+  <!-- 42. Training -->
+  <section class="slide">
+    <h2>Training = means and variances</h2>
+    <p>Prior: &nbsp;\(\hat{P}(\eta = c) = \dfrac{m_c}{m} = \dfrac{50}{150} = \dfrac{1}{3}\) &nbsp;for each species.</p>
+    <p class="step">For each species \(c\) and feature \(\ell\): \(\qquad \hat{a}_{c,\ell} = \dfrac{1}{m_c} \sum_{\text{class } c} z_\ell, \qquad \hat{\sigma}^2_{c,\ell} = \dfrac{1}{m_c} \sum_{\text{class } c} (z_\ell - \hat{a}_{c,\ell})^2\)</p>
+    <p class="step small soft">The maximum-likelihood estimates. We divide by \(m_c\), not by \(m_c - 1\).</p>
+    <div class="step">
+      <p class="small soft" style="margin:6px 0 8px">Trained on all 150 flowers: mean (standard deviation) in cm.</p>
+      <table class="grid-table model">
+        <tr><th></th><th>sepal length</th><th>sepal width</th><th>petal length</th><th>petal width</th></tr>
+        <tr><td class="label"><span class="tag setosa">setosa</span></td><td>5.01 (0.35)</td><td>3.43 (0.38)</td><td>1.46 (0.17)</td><td>0.25 (0.10)</td></tr>
+        <tr><td class="label"><span class="tag versicolor">versicolor</span></td><td>5.94 (0.51)</td><td>2.77 (0.31)</td><td>4.26 (0.47)</td><td>1.33 (0.20)</td></tr>
+        <tr><td class="label"><span class="tag virginica">virginica</span></td><td>6.59 (0.63)</td><td>2.97 (0.32)</td><td>5.55 (0.55)</td><td>2.03 (0.27)</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <!-- 43. Worked example: flower 51 -->
+  <section class="slide calc">
+    <h2>Worked example: flower 51</h2>
+    <p>\(z = (7.0,\; 3.2,\; 4.7,\; 1.4)\), &nbsp;the model of the previous slide.</p>
+    <table class="grid-table model step" style="margin:4px 0 22px">
+      <tr><th></th><th>\(\log \hat{P}(\eta = c)\)</th><th>\(\ell = 1\)</th><th>\(\ell = 2\)</th><th>\(\ell = 3\)</th><th>\(\ell = 4\)</th><th>sum</th></tr>
+      <tr><td class="label"><span class="tag setosa">setosa</span></td><td>&minus;1.10</td><td>&minus;16.19</td><td>&minus;0.12</td><td>&minus;176.53</td><td>&minus;59.84</td><td class="total">&minus;253.78</td></tr>
+      <tr><td class="label"><span class="tag versicolor">versicolor</span></td><td>&minus;1.10</td><td>&minus;2.42</td><td>&minus;0.71</td><td>&minus;0.60</td><td>+0.64</td><td class="total win">&minus;4.19</td></tr>
+      <tr><td class="label"><span class="tag virginica">virginica</span></td><td>&minus;1.10</td><td>&minus;0.67</td><td>&minus;0.03</td><td>&minus;1.53</td><td>&minus;2.27</td><td class="total">&minus;5.60</td></tr>
+    </table>
+    <p class="small soft" style="margin-top:-12px">Columns \(\ell = 1, \dots, 4\): \(\log \hat{f}_{\zeta_\ell \mid \eta}(z_\ell \mid c)\), rounded to 2 decimals.</p>
+    <p class="step">Versicolor wins: \(\hat{c} = \text{versicolor}\), the true species.</p>
+    <p class="step">\(\hat{P}(\eta = \text{versicolor} \mid \zeta = z) = \dfrac{e^{-4.19}}{e^{-253.78} + e^{-4.19} + e^{-5.60}} \approx\) <span class="answer">0.80</span>, &nbsp; virginica &asymp; 0.20, &nbsp; setosa &asymp; 0.</p>
+    <p class="step small soft">\(+0.64 > 0\): the density \(\hat{f}_{\zeta_4 \mid \eta}(1.4 \mid \text{versicolor}) \approx 1.90 > 1\). &nbsp;A density, again.</p>
+  </section>
+
+  <!-- 44. Game round -->
+  <section class="slide">
+    <h2>Game round: guess the species</h2>
+    <p class="small" style="margin-bottom:8px">The trained model, mean (standard deviation) in cm:</p>
+    <table class="grid-table model" style="margin-bottom:26px">
+      <tr><th></th><th>sepal length</th><th>sepal width</th><th>petal length</th><th>petal width</th></tr>
+      <tr><td class="label"><span class="tag setosa">setosa</span></td><td>5.01 (0.35)</td><td>3.43 (0.38)</td><td>1.46 (0.17)</td><td>0.25 (0.10)</td></tr>
+      <tr><td class="label"><span class="tag versicolor">versicolor</span></td><td>5.94 (0.51)</td><td>2.77 (0.31)</td><td>4.26 (0.47)</td><td>1.33 (0.20)</td></tr>
+      <tr><td class="label"><span class="tag virginica">virginica</span></td><td>6.59 (0.63)</td><td>2.97 (0.32)</td><td>5.55 (0.55)</td><td>2.03 (0.27)</td></tr>
+    </table>
+    <table class="grid-table game">
+      <tr><th>flower</th><th>measurements (cm)</th><th>true species</th><th>the classifier says</th></tr>
+      <tr class="step"><td>1</td><td>5.1, 3.5, 1.4, 0.2</td><td class="ans"><span class="tag setosa">setosa</span></td><td class="ans"><span class="tag setosa">setosa</span> <span class="small soft">1.00</span></td></tr>
+      <tr class="step"><td>51</td><td>7.0, 3.2, 4.7, 1.4</td><td class="ans"><span class="tag versicolor">versicolor</span></td><td class="ans"><span class="tag versicolor">versicolor</span> <span class="small soft">0.80</span></td></tr>
+      <tr class="step"><td>78</td><td>6.7, 3.0, 5.0, 1.7</td><td class="ans"><span class="tag versicolor">versicolor</span></td><td class="ans"><span class="tag virginica">virginica</span> <span class="small soft">0.92</span> <span class="wrong-answer">&#10007;</span></td></tr>
+      <tr class="step"><td>120</td><td>6.0, 2.2, 5.0, 1.5</td><td class="ans"><span class="tag virginica">virginica</span></td><td class="ans"><span class="tag versicolor">versicolor</span> <span class="small soft">0.96</span> <span class="wrong-answer">&#10007;</span></td></tr>
+    </table>
+    <p class="step small soft" style="margin-top:16px">The number after the species: its posterior \(\hat{P}(\eta = \hat{c} \mid \zeta = z)\). &nbsp;On all 150 flowers: 144 right, 6 wrong (flowers 53, 71, 78, 107, 120, 134).</p>
+  </section>
+
+  <!-- 45. Evaluation -->
+  <section class="slide">
+    <h2>How good is it?</h2>
+    <p class="soft">As for the spam filter: trained on 120 flowers (80%), tested on 30 new ones (20%).</p>
+    <div class="two" style="grid-template-columns: auto 1fr; gap: 50px">
+      <table class="cm three">
+        <tr><th></th><th>gold: setosa</th><th>gold: versicolor</th><th>gold: virginica</th></tr>
+        <tr><th>predicted: setosa</th><td class="right"><span class="big">8</span></td><td>0</td><td>0</td></tr>
+        <tr><th>predicted: versicolor</th><td>0</td><td class="right"><span class="big">11</span></td><td>0</td></tr>
+        <tr><th>predicted: virginica</th><td>0</td><td class="wrong"><span class="big">1</span></td><td class="right"><span class="big">10</span></td></tr>
+      </table>
+      <div class="step">
+        <p>accuracy = 29 / 30 &asymp; <b>0.967</b></p>
+        <p class="small soft">The one mistake: flower 78 (versicolor called virginica).</p>
+        <p class="small soft">"Always versicolor" on the same test set: accuracy 0.400.</p>
+      </div>
+    </div>
+    <p class="step" style="margin-top:16px">The species are balanced (50 / 50 / 50): here accuracy is a fair measure.</p>
+    <p class="step small soft">10-fold cross-validation on the training set: mean accuracy 0.942.</p>
+    <p class="step"><span class="trap">The assumption is false, and still 29 of 30 are right.</span></p>
+  </section>
+
+  <!-- 46. To the notebook, and further reading -->
+  <section class="slide">
+    <h2>To the notebook, and further reading</h2>
+    <a class="button" style="margin-top:0" href="http://localhost:8888/lab/tree/notebooks/iris.ipynb" target="_blank" rel="noopener">Open the notebook &rarr;</a>
+    <p class="small soft" style="margin:10px 0 22px">Opens <code>notebooks/iris.ipynb</code> in JupyterLab, started in the project folder (port 8888).</p>
+    <div class="box reading">
+      <div class="name">Naive Bayes with real-valued features</div>
+      <p><a href="https://www.statlearning.com/" target="_blank" rel="noopener"><i>An Introduction to Statistical Learning, with Python</i> (free PDF)</a></p>
+      <p class="when">Read section 4.4.4 "Naive Bayes" (pp. 158&ndash;159): the naive Bayes assumption, and the normal distribution for each feature.</p>
+    </div>
+  </section>
+
+
+  <!-- ============================== Part 4: the MNIST classification problem ============================== -->
+
+  <!-- 47. Part title -->
+  <section class="slide part">
+    <div class="kicker">Part 4</div>
+    <h1>The MNIST classification problem</h1>
+    <img class="digits-row" src="img/mnist-sample.png" alt="Ten handwritten digits from MNIST: 0 to 9">
+    <p class="step">70,000 handwritten digits. How does the demo read them?</p>
+  </section>
+
+  <!-- 48. The data -->
+  <section class="slide">
+    <h2>The data: MNIST</h2>
+    <ul>
+      <li>70,000 images of handwritten digits 0&ndash;9: a <b>training set</b> of 60,000 and a <b>test set</b> of 10,000. We keep this split.</li>
+      <li>Written by Census Bureau employees and by high-school students.</li>
+      <li>Each digit was resized to fit in a \(20 \times 20\) box, then placed in a \(28 \times 28\) image with its center of mass in the middle.</li>
+    </ul>
+    <div class="step" style="margin-top:20px">
+      <p>An item is now an <b>image</b>. &nbsp;\(\eta\): the class, now one of the 10 digits, \(c \in \{0, 1, \dots, 9\}\).</p>
+      <p class="soft">The training set is balanced: each digit is 9.0% to 11.2% of it.</p>
+    </div>
+  </section>
+
+  <!-- 49. A first look at the data -->
+  <section class="slide">
+    <h2>A first look at the data</h2>
+    <div class="pixel-figs">
+      <img src="img/mnist-pixels.png" alt="The first training digit, a 5, as 28 by 28 gray pixels, and a 7 by 7 piece of it with its gray levels, numbers from 0 to 253" style="width:690px">
+      <img class="step" src="img/mnist-gray.png" alt="How many pixels have each gray level, on a log scale: a huge peak at 0, a peak near 255, and few pixels in between" style="width:640px">
+    </div>
+    <p>One image = \(28 \times 28 = 784\) pixels. Each pixel has a <b>gray level</b> from 0 (white) to 255 (black ink).</p>
+    <p class="step">All 60,000 training images: 80.9% of the pixels are exactly 0, and most dark pixels are near 255. <b>Almost black or white.</b></p>
+  </section>
+
+  <!-- 50. Binarization -->
+  <section class="slide">
+    <h2>Black or white: binarization</h2>
+    <img src="img/mnist-binarize.png" alt="Six training digits: on top with their gray levels, below in black and white only" style="width:820px; margin-bottom:16px">
+    <div class="box step">
+      <p>Pixels \(r = 1, \dots, 784\), row by row: pixels 1 to 28 are the first row.</p>
+      <p>\(\psi_r = 1\) if pixel \(r\) has ink (gray level above 127), \(\psi_r = 0\) if not.</p>
+      <p>\(\psi = (\psi_1, \dots, \psi_{784})\): the random vector of the pixels. &nbsp;\(u = (u_1, \dots, u_{784})\): its observed value, one image.</p>
+    </div>
+    <p class="step small soft">127, the middle of 0&ndash;255, is our choice. The demo uses the same.</p>
+  </section>
+
+  <!-- 51. Recall: the Bernoulli distribution -->
+  <section class="slide">
+    <h2>Recall: the Bernoulli distribution</h2>
+    <div class="box">
+      <div class="name">Bernoulli distribution</div>
+      <p>A random variable with the values 0 and 1 has the distribution \(\mathrm{Ber}(\theta)\), \(\theta \in (0, 1)\), if it takes the value 1 with probability \(\theta\) and the value 0 with probability \(1 - \theta\).</p>
+    </div>
+    <div class="box step">
+      <div class="name">In one formula, for a pixel</div>
+      <p>\[ P(\psi_r = u_r) = \theta^{u_r} (1 - \theta)^{1 - u_r}, \qquad u_r \in \{0, 1\} \]</p>
+      <p class="when">\(u_r = 1\): \(\theta^1 (1 - \theta)^0 = \theta\). &nbsp;\(u_r = 0\): \(\theta^0 (1 - \theta)^1 = 1 - \theta\).</p>
+    </div>
+    <p class="step small soft">Carlos writes \(\mathrm{Ber}(p)\). Here \(p\) is taken by the word probabilities \(p_c(w)\), so we write \(\theta\).</p>
+  </section>
+
+  <!-- 52. Why Bernoulli? Why not normal? -->
+  <section class="slide">
+    <h2>Why Bernoulli? Why not normal?</h2>
+    <p>After binarization, a pixel has only 2 values. A distribution on \(\{0, 1\}\) is fixed by one number, the probability of 1: it is \(\mathrm{Ber}(\theta)\).</p>
+    <div class="step">
+      <p style="margin-bottom:8px">Why not a normal distribution for each gray level, as for the iris flowers?</p>
+      <ul>
+        <li>Gray levels are not bell-shaped: almost white or almost black.</li>
+        <li>Digit 0: <b>219</b> of the 784 pixels have the same gray level in all 5,923 training zeros. Variance \(\sigma^2 = 0\), and the normal PDF divides by \(\sigma^2\)!</li>
+      </ul>
+    </div>
+    <table class="grid-table step" style="margin-top:16px; font-size:24px">
+      <tr><th></th><th>spam</th><th>iris</th><th>MNIST</th></tr>
+      <tr><td class="label">features</td><td>word counts \(x_w\): 0, 1, 2, &hellip;</td><td>lengths \(z_\ell\) in cm</td><td>pixels \(u_r\): 0 or 1</td></tr>
+      <tr><td class="label">given the class</td><td>multinomial</td><td>normal, for each feature</td><td>Bernoulli, for each pixel</td></tr>
+      <tr><td class="label">we compute</td><td>probabilities</td><td>densities</td><td>probabilities</td></tr>
+    </table>
+  </section>
+
+  <!-- 53. Trap question: how many numbers? -->
+  <section class="slide">
+    <h2>Trap question: how many numbers?</h2>
+    <p class="question" style="margin-bottom:30px">To know \(P(\psi = u \mid \eta = c)\) for every possible image \(u\) of a digit \(c\), how many numbers do we need?</p>
+    <div class="step">
+      <p>One for every possible image: \(2^{784} \approx 10^{236}\). &nbsp;We have 60,000 training images.</p>
+      <p>Most images would never be seen even once. This is the <b>curse of dimensionality</b>.</p>
+    </div>
+    <p class="step">With the naive Bayes assumption: 784 numbers per digit. &nbsp;\(10 \times 784 + 10 = 7{,}850\) numbers in total: the demo's footer.</p>
+  </section>
+
+  <!-- 54. The naive Bayes assumption, again: the Bernoulli naive Bayes model -->
+  <section class="slide">
+    <h2>The naive Bayes assumption, again</h2>
+    <div class="box">
+      <div class="name">Naive Bayes assumption</div>
+      <p>Given \(\eta = c\), the pixels \(\psi_1, \dots, \psi_{784}\) are mutually conditionally independent:</p>
+      <p>\[ P(\psi = u \mid \eta = c) = \prod_{r=1}^{784} P(\psi_r = u_r \mid \eta = c) \]</p>
+    </div>
+    <div class="box step">
+      <div class="name">Bernoulli naive Bayes model</div>
+      <p>And given \(\eta = c\), each \(\psi_r \sim \mathrm{Ber}(\theta_{c,r})\), &nbsp;where \(\theta_{c,r} = P(\psi_r = 1 \mid \eta = c)\):</p>
+      <p>\[ P(\psi = u \mid \eta = c) = \prod_{r=1}^{784} \theta_{c,r}^{\,u_r} (1 - \theta_{c,r})^{1 - u_r} \]</p>
+    </div>
+    <p class="step soft">\(10 \times 784 = 7{,}840\) Bernoulli distributions: one for each digit and pixel.</p>
+  </section>
+
+  <!-- 55. The Bernoulli naive Bayes classifier -->
+  <section class="slide calc">
+    <h2>The Bernoulli naive Bayes classifier</h2>
+    <p>Bayes' formula with the partition \(\{\eta = 0\}, \dots, \{\eta = 9\}\) and \(A = \{\psi = u\}\). &nbsp;<span class="soft">Here \(P(A) > 0\): probabilities again, not densities.</span></p>
+    <div class="box step">
+      <div class="name">The classifier, in logarithms</div>
+      <p>\[ \hat{c} = \operatorname*{argmax}_{c} \Big[ \log \hat{P}(\eta = c) + \sum_{r=1}^{784} \Big( u_r \log \hat{\theta}_{c,r} + (1 - u_r) \log(1 - \hat{\theta}_{c,r}) \Big) \Big] \]</p>
+      <p class="when">The expression in the brackets: the <b>log score</b> of the digit \(c\). The largest log score wins.</p>
+    </div>
+    <p class="step"><span class="trap">No ink is evidence too!</span> &nbsp;A pixel without ink brings \(\log(1 - \hat{\theta}_{c,r})\).</p>
+    <p class="step small soft">The spam filter was different: a word that is not in the message has \(x_w = 0\), and adds \(0 \cdot \log \hat{p}_c(w) = 0\).</p>
+  </section>
+
+  <!-- 56. Training = counting -->
+  <section class="slide">
+    <h2>Training = counting</h2>
+    <p>Prior: &nbsp;\(\hat{P}(\eta = c) = \dfrac{m_c}{m}\), &nbsp;from 0.090 (digit 5) to 0.112 (digit 1).</p>
+    <p class="step">\(\theta_{c,r}\): the fraction of the training images of \(c\) with ink at pixel \(r\): &nbsp;\(\dfrac{m_{c,r}}{m_c}\), &nbsp;<span class="soft small">\(m_{c,r}\) = how many of them have ink there.</span></p>
+    <p class="step"><span class="trap">Digit 1: 309 pixels never have ink in the 6,742 training 1s.</span> &nbsp;A new 1 with ink at one of them gets probability <b>0</b>.</p>
+    <p class="step small soft">Without smoothing: 32 test images get probability 0 for their true digit, and 4 get 0 for all ten digits (Bayes' formula gives 0/0).</p>
+    <div class="box step">
+      <div class="name">Laplace smoothing: add 1 to the 2 counts, ink and no ink</div>
+      <p>\[ \hat{\theta}_{c,r} = \frac{m_{c,r} + 1}{m_c + 2} \]</p>
+      <p class="when">Always inside \((0, 1)\), as \(\mathrm{Ber}(\theta)\) requires. &nbsp;(Spam: add 1 to each of the \(\lvert V \rvert\) word counts.)</p>
+    </div>
+  </section>
+
+  <!-- 57. How the demo works. The button returns the demo to this slide (from=57). -->
+  <section class="slide">
+    <h2>How the demo works</h2>
+    <ol class="demo-steps">
+      <li>You draw. The page cleans up your strokes the way MNIST was made: a \(20 \times 20\) box, then the center of mass in the middle of \(28 \times 28\).</li>
+      <li class="step">Binarization: \(u_r = 1\) if the gray level is above 127. <span class="soft">"What the machine sees".</span></li>
+      <li class="step">The log score of each digit \(c = 0, \dots, 9\), with the 7,850 numbers from training.</li>
+      <li class="step">Bayes' formula: \(\displaystyle \hat{P}(\eta = c \mid \psi = u) = \frac{e^{\text{log score of } c}}{\sum_{c'} e^{\text{log score of } c'}}\). <span class="soft">These are the bars.</span></li>
+    </ol>
+    <p class="step small soft" style="margin-top:6px">"Why": each pixel's term in the log score of the winner, minus its term in the log score of the runner-up. &nbsp;Before you draw, the bars show the prior \(\hat{P}(\eta = c)\): a rule of the demo, not of the model.</p>
+    <a class="button step" style="margin-top:10px" href="../demo/index.html?from=57">Open the demo &rarr;</a>
+  </section>
+
+  <!-- 58. Trap question: a blank page -->
+  <section class="slide">
+    <h2>Trap question: a blank page</h2>
+    <p class="question">No ink at all: \(u = (0, 0, \dots, 0)\). What does the classifier say?</p>
+    <div class="options">
+      <div class="option"><b>A</b>the prior</div>
+      <div class="option"><b>B</b>10% each</div>
+      <div class="option"><b>C</b>"1", sure</div>
+      <div class="option"><b>D</b>"0", sure</div>
+    </div>
+    <div class="step" style="margin-top:40px">
+      <p><b>C</b>: &nbsp;\(\hat{P}(\eta = 1 \mid \psi = u) \approx 1 - 5.4 \cdot 10^{-14}\).</p>
+      <p>No ink is evidence. The digit 1 has the least ink: 60 ink pixels on average; the digit 0 has 138.</p>
+    </div>
+  </section>
+
+  <!-- 59. What the machine thinks each digit looks like -->
+  <section class="slide">
+    <h2>What the machine thinks each digit looks like</h2>
+    <img src="img/mnist-theta.png" alt="Ten blurry pictures, one per digit 0 to 9: the estimated probability of ink at each pixel, dark where it is high" style="width:1300px; margin:10px 0 26px">
+    <p>The 784 numbers \(\hat{\theta}_{c,1}, \dots, \hat{\theta}_{c,784}\) of a digit \(c\), drawn as a \(28 \times 28\) picture: dark where \(c\) often has ink.</p>
+    <p class="step">Look at 4 and 9: almost the same picture. The most common mistake: a 4 called 9 (138 test images).</p>
+  </section>
+
+  <!-- 60. A generative model: the joint distribution -->
+  <section class="slide">
+    <h2>A generative model: the joint distribution</h2>
+    <p>By the multiplication theorem:</p>
+    <p>\[ P(\eta = c, \psi = u) = P(\eta = c)\, P(\psi = u \mid \eta = c) \]</p>
+    <div class="step">
+      <p>The model knows the joint distribution of the digit and the image. So it can <b>generate</b> images:</p>
+      <ol>
+        <li>choose a digit \(c\) &nbsp;<span class="soft">(for example, with probability \(\hat{P}(\eta = c)\))</span>;</li>
+        <li>draw each pixel on its own: \(\psi_r \sim \mathrm{Ber}(\hat{\theta}_{c,r})\), independently.</li>
+      </ol>
+    </div>
+    <p class="step soft">A <b>generative model</b>. The spam filter and the iris classifier are generative models too.</p>
+  </section>
+
+  <!-- 61. Let the machine dream -->
+  <section class="slide">
+    <h2>Let the machine dream</h2>
+    <img src="img/mnist-dreams.png" alt="Three random images for each digit 0 to 9, drawn from the model: clouds of black dots with roughly the shape of the digit" style="width:1300px; margin-bottom:20px">
+    <p class="step">Roughly the right shape. But <b>clouds of dots</b>, not strokes of a pen.</p>
+    <p class="step"><span class="trap">Can the machine read its own dreams?</span> &nbsp;1,000 dreams: <b>100%</b> right.</p>
+  </section>
+
+  <!-- 62. How the independence assumption fails us -->
+  <section class="slide">
+    <h2>How the independence assumption fails us</h2>
+    <p style="margin-bottom:10px">Two neighbouring pixels in the middle: \(r = 378\) (row 14, column 14) and \(r' = 379\). Inside the 5,421 training 5s:</p>
+    <table class="grid-table model" style="margin-bottom:18px">
+      <tr><th>ink at \(r\)</th><th>ink at \(r'\)</th><th>ink at both</th><th>product</th><th>\(\operatorname{corr}(\psi_r, \psi_{r'})\)</th></tr>
+      <tr><td>0.562</td><td>0.494</td><td class="total">0.463</td><td>0.278</td><td class="total">0.75</td></tr>
+    </table>
+    <p class="step">Conditionally independent given \(\eta = 5\) would mean: both = product, and correlation 0. <b>False.</b> Ink comes in strokes.</p>
+    <div class="step">
+      <p style="margin-bottom:6px">And the classifier is <b>overconfident</b>: 67% of its wrong answers come with a posterior above 0.99.</p>
+      <img src="img/mnist-mistakes.png" alt="Eight test digits that the classifier gets wrong, with the posterior of its answer: six of them above 0.999" style="width:1100px">
+    </div>
+  </section>
+
+  <!-- 63. Evaluation -->
+  <section class="slide">
+    <h2>How good is it?</h2>
+    <div class="two" style="grid-template-columns: auto 1fr; gap: 44px; max-width: 1350px">
+      <table class="cm ten">
+        <tr><th>predicted &darr; &nbsp;gold &rarr;</th><th>0</th><th>1</th><th>2</th><th>3</th><th>4</th><th>5</th><th>6</th><th>7</th><th>8</th><th>9</th></tr>
+        <tr><th>0</th><td class="right">882</td><td>0</td><td>17</td><td>4</td><td>2</td><td>16</td><td>17</td><td>2</td><td>10</td><td>12</td></tr>
+        <tr><th>1</th><td>0</td><td class="right">1086</td><td>14</td><td>17</td><td>7</td><td>11</td><td>14</td><td>33</td><td>28</td><td>13</td></tr>
+        <tr><th>2</th><td>3</td><td>6</td><td class="right">840</td><td>36</td><td>4</td><td>5</td><td>15</td><td>17</td><td>12</td><td>6</td></tr>
+        <tr><th>3</th><td>4</td><td>5</td><td>32</td><td class="right">839</td><td>0</td><td class="wrong">106</td><td>1</td><td>3</td><td class="wrong">68</td><td>8</td></tr>
+        <tr><th>4</th><td>1</td><td>0</td><td>21</td><td>1</td><td class="right">799</td><td>24</td><td>14</td><td>17</td><td>16</td><td class="wrong">64</td></tr>
+        <tr><th>5</th><td class="wrong">51</td><td>9</td><td>5</td><td>30</td><td>2</td><td class="right">655</td><td>37</td><td>0</td><td>27</td><td>9</td></tr>
+        <tr><th>6</th><td>21</td><td>4</td><td>28</td><td>7</td><td>16</td><td>18</td><td class="right">853</td><td>0</td><td>10</td><td>0</td></tr>
+        <tr><th>7</th><td>1</td><td>0</td><td>16</td><td>13</td><td>2</td><td>8</td><td>0</td><td class="right">864</td><td>6</td><td>29</td></tr>
+        <tr><th>8</th><td>17</td><td>25</td><td class="wrong">57</td><td>44</td><td>12</td><td>24</td><td>7</td><td>25</td><td class="right">762</td><td>21</td></tr>
+        <tr><th>9</th><td>0</td><td>0</td><td>2</td><td>19</td><td class="wrong">138</td><td>25</td><td>0</td><td class="wrong">67</td><td>35</td><td class="right">847</td></tr>
+      </table>
+      <div class="step">
+        <p>accuracy = 8,427 / 10,000 &asymp; <b>0.843</b></p>
+        <p class="small soft">Trained on the 60,000 training images, tested on the 10,000 test images.</p>
+        <p class="small soft">"Always 1": accuracy 1,135 / 10,000 &asymp; 0.11.</p>
+        <p class="small">Most common mistakes: a 4 called 9 (138), a 5 called 3 (106), an 8 called 3 (68).</p>
+      </div>
+    </div>
+    <p class="step" style="margin-top:14px"><span class="trap">The assumption is false, and still 84% are right.</span> &nbsp;<span class="small soft">With 7,850 numbers and Bayes' formula.</span></p>
+  </section>
+
+  <!-- 64. To the notebook, the demo, and further reading -->
+  <section class="slide">
+    <h2>To the notebook, and further reading</h2>
+    <div style="display:flex; gap:30px">
+      <a class="button" style="margin-top:0" href="http://localhost:8888/lab/tree/notebooks/mnist.ipynb" target="_blank" rel="noopener">Open the notebook &rarr;</a>
+      <a class="button" style="margin-top:0" href="../demo/index.html?from=64">Open the demo &rarr;</a>
+    </div>
+    <p class="small soft" style="margin:10px 0 22px">Opens <code>notebooks/mnist.ipynb</code> in JupyterLab, started in the project folder (port 8888).</p>
+    <div class="box reading">
+      <div class="name">Bernoulli naive Bayes on MNIST</div>
+      <p><a href="https://probml.github.io/pml-book/book1.html" target="_blank" rel="noopener">Murphy, <i>Probabilistic Machine Learning: An Introduction</i> (free PDF)</a></p>
+      <p class="when">Read section 9.3 "Naive Bayes classifiers" (pp. 332&ndash;335): the model, binarized MNIST, training, Laplace smoothing. Its Figure 9.6 is our "what the machine thinks".</p>
+    </div>
+    <p class="step"><span class="trap">Challenge: draw a 4 that the demo calls 9.</span></p>
+  </section>
+
+</div>
+
+<script>
+// ---------------------------------------------------------------- The slide engine
+//
+// Keys:  right arrow, space, Page Down = next step or next slide
+//        left arrow, Page Up = back one slide        Home / End = first / last slide
+//        F = full screen
+// The address ends with #N, the number of the slide on screen (1, 2, 3, ...).
+
+const slides = [...document.querySelectorAll(".slide")];
+let current = 0;
+
+// Number every slide except the title slide: "n / m", n = the same number as #N in the address, m = the number of slides
+slides.forEach((s, k) => {
+  if (k === 0) return;
+  const num = document.createElement("div");
+  num.className = "num";
+  num.textContent = `${k + 1} / ${slides.length}`;
+  s.appendChild(num);
+});
+
+// The page is 1600 x 900: scale it to fit the window
+function fit() {
+  const scale = Math.min(window.innerWidth / 1600, window.innerHeight / 900);
+  document.getElementById("deck").style.transform = `translate(-50%, -50%) scale(${scale})`;
+}
+
+// Show slide n. With all = true, all its steps are shown (used when going back).
+function show(n, all = false) {
+  current = Math.max(0, Math.min(slides.length - 1, n));
+  slides.forEach((s, k) => s.classList.toggle("current", k === current));
+  slides[current].querySelectorAll(".step").forEach(el => el.classList.toggle("shown", all));
+  history.replaceState(null, "", "#" + (current + 1));
+  // the demo button tells the demo which slide to come back to
+  document.getElementById("open-demo").href = "../demo/index.html?from=" + (current + 1);
+}
+
+function next() {
+  const hidden = slides[current].querySelector(".step:not(.shown)");
+  if (hidden) hidden.classList.add("shown");     // first reveal the next step...
+  else if (current < slides.length - 1) show(current + 1);   // ...then go to the next slide
+}
+
+function back() { if (current > 0) show(current - 1, true); }
+
+document.addEventListener("keydown", event => {
+  if (["ArrowRight", " ", "PageDown"].includes(event.key)) { event.preventDefault(); next(); }
+  if (["ArrowLeft", "PageUp"].includes(event.key)) { event.preventDefault(); back(); }
+  if (event.key === "Home") show(0);
+  if (event.key === "End") show(slides.length - 1, true);
+  if (event.key === "f") document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+});
+
+// A click anywhere (except on a link) also goes forward
+document.addEventListener("click", event => { if (!event.target.closest("a")) next(); });
+
+window.addEventListener("resize", fit);
+window.addEventListener("hashchange", () => show(parseInt(location.hash.slice(1), 10) - 1 || 0, true));
+
+fit();
+show((parseInt(location.hash.slice(1), 10) || 1) - 1, true);
+
+// Formulas: \( ... \) inside a line, \[ ... \] on their own line
+window.addEventListener("DOMContentLoaded", () => {
+  renderMathInElement(document.body, {
+    delimiters: [{ left: "\\[", right: "\\]", display: true }, { left: "\\(", right: "\\)", display: false }],
+  });
+});
+</script>
+</body>
+</html>

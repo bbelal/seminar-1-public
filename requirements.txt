@@ -1,0 +1,8 @@
+# Python libraries for Seminar 1.
+# Install them with:  pip install -r requirements.txt
+
+numpy>=1.26          # arrays; the from-scratch naive Bayes classifiers
+pandas>=2.1          # tables in the notebooks, reading the SMS data
+matplotlib>=3.8      # plots in the notebooks
+scikit-learn>=1.4    # iris data, train/test splits, cross-validation, checking our classifiers
+jupyterlab>=4.0      # to open and run the notebooks

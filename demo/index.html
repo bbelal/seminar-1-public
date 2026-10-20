@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bayes reads your handwriting</title>
+<style>
+  @font-face { font-family: "Golos Text"; font-weight: 400; src: url("fonts/golos-text-latin-400-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Golos Text"; font-weight: 500; src: url("fonts/golos-text-latin-500-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Golos Text"; font-weight: 600; src: url("fonts/golos-text-latin-600-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Golos Text"; font-weight: 700; src: url("fonts/golos-text-latin-700-normal.woff2") format("woff2"); }
+  @font-face { font-family: "Caveat"; font-weight: 500; src: url("fonts/caveat-latin-500-normal.woff2") format("woff2"); }
+
+  :root {
+    --paper: #fbfcfd;          /* the page */
+    --grid: #dce5ee;           /* squared-paper lines */
+    --margin: #e8a59d;         /* the red margin line of a school exercise book */
+    --ink: #1b2333;            /* text, and the pixels the machine sees */
+    --ink-soft: #5b6577;
+    --line: #e3e8ef;
+    --pen: #1d3fa0;            /* your strokes: ballpoint blue */
+    --bar: #c9d2df;            /* the bars that are not winning */
+    --for-winner: #2a78d6;     /* pixels that vote for the winner, and the winning bar */
+    --for-winner-rgb: 42, 120, 214;
+    --for-runner-rgb: 235, 104, 52;   /* pixels that vote for the runner-up */
+    --for-runner: #eb6834;
+    --pad: min(calc(100vh - 10.5rem), 48vw);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Golos Text", system-ui, "Segoe UI", sans-serif;
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    gap: 2vh;
+    padding: 2.5vh 3vw;
+    height: 100vh;
+  }
+
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 2rem; }
+  h1 { margin: 0; font-size: clamp(1.4rem, 2.4vw, 2.3rem); font-weight: 600; letter-spacing: -0.01em; }
+  .actions { display: flex; gap: 0.6rem; }
+  button {
+    font: inherit; font-size: clamp(0.9rem, 1.1vw, 1.1rem); font-weight: 500;
+    color: var(--ink); background: white;
+    border: 1px solid #c3ccd9; border-radius: 8px;
+    padding: 0.45em 1em; cursor: pointer;
+  }
+  button:hover { border-color: var(--ink-soft); }
+  /* "Back to slides": a link that looks like the buttons */
+  a.back {
+    font-size: clamp(0.9rem, 1.1vw, 1.1rem); font-weight: 500;
+    color: var(--ink); background: white; text-decoration: none;
+    border: 1px solid #c3ccd9; border-radius: 8px;
+    padding: 0.45em 1em;
+  }
+  a.back:hover { border-color: var(--ink-soft); }
+  a.back:focus-visible { outline: 3px solid var(--for-winner); outline-offset: 2px; }
+  button:focus-visible { outline: 3px solid var(--for-winner); outline-offset: 2px; }
+  kbd { font: inherit; color: var(--ink-soft); margin-left: 0.4em; }
+
+  main { display: grid; grid-template-columns: var(--pad) 1fr; gap: 4vw; align-items: start; min-height: 0; }
+
+  /* The drawing pad: a page of a squared exercise book */
+  .pad-wrap {
+    position: relative;
+    width: var(--pad); aspect-ratio: 1;
+    background-color: white;
+    background-image:
+      linear-gradient(to right, transparent calc(100% - 9%), var(--margin) calc(100% - 9%), var(--margin) calc(100% - 9% + 1.5px), transparent calc(100% - 9% + 1.5px)),
+      linear-gradient(to right, var(--grid) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--grid) 1px, transparent 1px);
+    background-size: 100% 100%, calc(var(--pad) / 24) calc(var(--pad) / 24), calc(var(--pad) / 24) calc(var(--pad) / 24);
+    border: 1px solid #cfd8e3;
+    border-radius: 6px;
+    box-shadow: 0 1px 0 #e6ebf1, 0 12px 30px -18px rgba(27, 35, 51, 0.35);
+  }
+  #pad { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+  .hint {
+    position: absolute; left: 8%; top: 7%;
+    font-family: "Caveat", cursive; font-weight: 500; font-size: calc(var(--pad) * 0.075);
+    color: var(--pen); opacity: 0.55; pointer-events: none;
+    transition: opacity 0.3s;
+  }
+  body:not(.empty) .hint { opacity: 0; }
+
+  /* The answer */
+  .result { display: grid; gap: calc(var(--pad) * 0.045); min-width: 0; }
+  .answer { display: flex; align-items: baseline; gap: 1.1rem; height: calc(var(--pad) * 0.17); }
+  .lead { font-size: calc(var(--pad) * 0.045); color: var(--ink-soft); }
+  #answer { font-size: calc(var(--pad) * 0.17); font-weight: 700; line-height: 0.8; }
+  #sure { font-size: calc(var(--pad) * 0.045); font-weight: 600; }
+  body.empty .lead::after { content: "Draw a digit from 0 to 9"; }
+  body:not(.empty) .lead::after { content: "It's a"; }
+
+  /* The ten bars */
+  .chart-title { margin: 0 0 0.6rem; font-size: clamp(0.95rem, 1.25vw, 1.25rem); font-weight: 500; color: var(--ink-soft); }
+  body.empty .chart-title .posterior, body:not(.empty) .chart-title .prior { display: none; }
+  .bars {
+    display: grid; grid-template-columns: repeat(10, 1fr);
+    height: calc(var(--pad) * 0.3);
+    padding-top: 1.8em;               /* room for the label of a full bar */
+    border-bottom: 1px solid #aeb8c6;
+  }
+  .bar { position: relative; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; }
+  .fill {
+    width: min(24px, 60%);
+    height: calc(var(--p, 0) * 100%);
+    min-height: 1px;
+    background: var(--bar);
+    border-radius: 4px 4px 0 0;
+    transition: height 0.22s ease-out, background-color 0.22s;
+  }
+  .bar.winner .fill { background: var(--for-winner); }
+  .value {
+    position: absolute; bottom: calc(var(--p, 0) * 100% + 6px);
+    font-size: clamp(0.8rem, 1.05vw, 1.05rem); font-weight: 600; font-variant-numeric: tabular-nums;
+    transition: bottom 0.22s ease-out;
+  }
+  .digits { display: grid; grid-template-columns: repeat(10, 1fr); text-align: center; margin-top: 0.4rem;
+            font-size: clamp(1rem, 1.5vw, 1.5rem); font-weight: 600; }
+
+  /* The two small pictures */
+  .pictures { display: grid; grid-template-columns: repeat(2, calc(var(--pad) * 0.4)); gap: 2vw; align-items: start; }
+  figure { margin: 0; display: grid; gap: 0.5rem; }
+  figure canvas {
+    width: calc(var(--pad) * 0.27); aspect-ratio: 1;
+    image-rendering: pixelated;
+    background-color: white;
+    background-image:
+      linear-gradient(to right, var(--line) 1px, transparent 1px),
+      linear-gradient(to bottom, var(--line) 1px, transparent 1px);
+    background-size: calc(100% / 28) calc(100% / 28);
+    border: 1px solid #cfd8e3;
+  }
+  figcaption { font-size: clamp(0.85rem, 1.05vw, 1.05rem); color: var(--ink-soft); line-height: 1.35; }
+  figcaption strong { color: var(--ink); font-weight: 600; }
+  .key { display: inline-block; width: 0.75em; height: 0.75em; border-radius: 2px; vertical-align: baseline; margin: 0 0.2em 0 0.1em; }
+
+  footer { font-size: clamp(0.8rem, 1vw, 1rem); color: var(--ink-soft); }
+
+  @media (prefers-reduced-motion: reduce) { .fill, .value, .hint { transition: none; } }
+  @media (max-width: 760px) {
+    :root { --pad: calc(100vw - 6vw); }
+    main { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body class="empty">
+  <header>
+    <h1>Bayes reads your handwriting</h1>
+    <div class="actions">
+      <a id="back" class="back" href="../slides/index.html">&larr; Back to slides</a>
+      <button id="undo" type="button">Undo stroke<kbd>Z</kbd></button>
+      <button id="clear" type="button">Clear<kbd>C</kbd></button>
+    </div>
+  </header>
+
+  <main>
+    <div class="pad-wrap">
+      <canvas id="pad" aria-label="Drawing pad: draw a digit here"></canvas>
+      <div class="hint">draw a digit here</div>
+    </div>
+
+    <section class="result" aria-live="polite">
+      <div class="answer">
+        <span class="lead"></span><span id="answer"></span><span id="sure"></span>
+      </div>
+
+      <div>
+        <p class="chart-title">
+          <span class="prior">Before you draw: the prior P(digit)</span>
+          <span class="posterior">After your drawing: the posterior P(digit | drawing)</span>
+        </p>
+        <div class="bars">
+          <div class="bar"><span class="value"></span><div class="fill"></div></div>
+          <div class="bar"><span class="value"></span><div class="fill"></div></div>
+          <div class="bar"><span class="value"></span><div class="fill"></div></div>
+          <div class="bar"><span class="value"></span><div class="fill"></div></div>
+          <div class="bar"><span class="value"></span><div class="fill"></div></div>
+          <div class="bar"><span class="value"></span><div class="fill"></div></div>
+          <div class="bar"><span class="value"></span><div class="fill"></div></div>
+          <div class="bar"><span class="value"></span><div class="fill"></div></div>
+          <div class="bar"><span class="value"></span><div class="fill"></div></div>
+          <div class="bar"><span class="value"></span><div class="fill"></div></div>
+        </div>
+        <div class="digits"><span>0</span><span>1</span><span>2</span><span>3</span><span>4</span><span>5</span><span>6</span><span>7</span><span>8</span><span>9</span></div>
+      </div>
+
+      <div class="pictures">
+        <figure>
+          <canvas id="sees" width="28" height="28"></canvas>
+          <figcaption><strong>What the machine sees:</strong> 28&times;28 pixels, ink or no ink</figcaption>
+        </figure>
+        <figure>
+          <canvas id="why" width="28" height="28"></canvas>
+          <figcaption><strong>Why:</strong> <span class="key" style="background: var(--for-winner)"></span>pixels voting for <span id="winner-name">the winner</span>, <span class="key" style="background: var(--for-runner)"></span>for <span id="runner-name">the runner-up</span></figcaption>
+        </figure>
+      </div>
+    </section>
+  </main>
+
+  <footer>Naive Bayes trained on 60,000 MNIST digits: 7,850 numbers and Bayes' formula, no neural network.</footer>
+
+  <script>
+    // The slides open this page as index.html?from=N, so "Back to slides" returns to slide N.
+    const fromSlide = new URLSearchParams(location.search).get("from");
+    if (fromSlide) document.getElementById("back").href = "../slides/index.html#" + fromSlide;
+  </script>
+  <script src="model.js"></script>
+  <script src="demo.js"></script>
+</body>
+</html>
